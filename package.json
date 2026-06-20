@@ -1,0 +1,41 @@
+{
+  "name": "zubora-kakeibo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "dev": "wrangler dev",
+    "dev:front": "vite --config app/front/vite.config.ts",
+    "build": "corepack pnpm build:front && corepack pnpm build:back",
+    "build:front": "vite build --config app/front/vite.config.ts",
+    "build:back": "tsc -p tsconfig.worker.json --noEmit",
+    "typecheck": "corepack pnpm typecheck:back && corepack pnpm typecheck:front && corepack pnpm typecheck:test",
+    "typecheck:back": "tsc -p tsconfig.worker.json --noEmit",
+    "typecheck:front": "vue-tsc -p tsconfig.front.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "deploy": "corepack pnpm build && wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply zubora-kakeibo --local",
+    "db:migrate:prod": "wrangler d1 migrations apply zubora-kakeibo --remote"
+  },
+  "dependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "hono": "^4.6.17",
+    "lucide-vue-next": "^0.468.0",
+    "vue": "^3.5.13",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241230.0",
+    "@types/node": "^26.0.0",
+    "@vue/test-utils": "^2.4.6",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.6",
+    "vitest": "^2.1.8",
+    "vue-tsc": "^2.2.12",
+    "wrangler": "^4.103.0"
+  }
+}

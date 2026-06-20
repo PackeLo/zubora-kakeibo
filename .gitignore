@@ -5,3 +5,8 @@ CLAUDE.local.md.bak.*
 .claude/settings.local.json.bak.*
 AGENTS.md
 AGENTS.md.bak.*
+node_modules/
+app/front/dist/
+coverage/
+.wrangler/
+.dev.vars

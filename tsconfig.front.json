@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["vite/client"],
+    "noEmit": true
+  },
+  "include": ["app/front/src/**/*.ts", "app/front/src/**/*.vue", "vite-env.d.ts"]
+}

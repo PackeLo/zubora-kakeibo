@@ -1,0 +1,258 @@
+openapi: 3.1.0
+info:
+  title: Zubora Kakeibo GPT Actions
+  version: 0.1.0
+servers:
+  - url: https://{workerDomain}
+    variables:
+      workerDomain:
+        default: zubora-kakeibo.example.workers.dev
+        description: Replace with the deployed Cloudflare Workers domain.
+paths:
+  /api/action/taxonomy:
+    get:
+      operationId: getTaxonomy
+      summary: Get active categories and tags
+      x-openai-isConsequential: false
+      responses:
+        "200":
+          description: Active taxonomy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaxonomyResponse"
+  /api/action/entry-sources:
+    post:
+      operationId: createEntrySource
+      summary: Create an entry source and pending source items
+      x-openai-isConsequential: true
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEntrySourceRequest"
+      responses:
+        "200":
+          description: Created source and item IDs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entrySourceId:
+                    type: string
+                  createdEntrySourceItemIds:
+                    type: array
+                    items:
+                      type: string
+                  status:
+                    type: string
+  /api/action/insights/overview:
+    get:
+      operationId: getInsightOverview
+      summary: Get household overview for a period of 1461 days or less
+      x-openai-isConsequential: false
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Overview summary
+  /api/action/insights/monthly:
+    get:
+      operationId: getMonthlyInsights
+      summary: Get monthly cashflow for a period of 1461 days or less
+      x-openai-isConsequential: false
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Monthly summary
+  /api/action/insights/category:
+    get:
+      operationId: getCategoryInsights
+      summary: Get category totals for a period of 1461 days or less
+      x-openai-isConsequential: false
+      parameters:
+        - $ref: "#/components/parameters/EntryType"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CategoryIds"
+        - $ref: "#/components/parameters/TagIds"
+        - $ref: "#/components/parameters/SubjectUserIds"
+      responses:
+        "200":
+          description: Category summary
+  /api/action/insights/entries:
+    get:
+      operationId: getInsightEntries
+      summary: Get limited entries for household consultation over 400 days or less
+      x-openai-isConsequential: false
+      parameters:
+        - $ref: "#/components/parameters/EntryType"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CategoryIds"
+        - $ref: "#/components/parameters/TagIds"
+        - $ref: "#/components/parameters/SubjectUserIds"
+        - in: query
+          name: limit
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+      responses:
+        "200":
+          description: Limited entries
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    EntryType:
+      in: query
+      name: type
+      required: false
+      schema:
+        type: string
+        enum: [expense, income]
+    From:
+      in: query
+      name: from
+      required: true
+      schema:
+        type: string
+        format: date
+        description: Start date. GPT insight endpoints reject ranges longer than their documented maximum.
+    To:
+      in: query
+      name: to
+      required: true
+      schema:
+        type: string
+        format: date
+        description: End date. Must be greater than or equal to from.
+    CategoryIds:
+      in: query
+      name: categoryIds
+      required: false
+      schema:
+        type: string
+        description: Comma-separated category IDs
+    TagIds:
+      in: query
+      name: tagIds
+      required: false
+      schema:
+        type: string
+        description: Comma-separated tag IDs
+    SubjectUserIds:
+      in: query
+      name: subjectUserIds
+      required: false
+      schema:
+        type: string
+        description: Comma-separated subject user IDs
+  schemas:
+    TaxonomyResponse:
+      type: object
+      properties:
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/Category"
+        incomeCategories:
+          type: array
+          items:
+            $ref: "#/components/schemas/Category"
+        tags:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tag"
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        kind:
+          type: string
+          enum: [expense, income]
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+    CreateEntrySourceRequest:
+      type: object
+      required: [sourceType, items]
+      properties:
+        sourceType:
+          type: string
+          enum: [manual, receipt, order_detail, credit_card_statement, bank_statement, handwritten_note, other]
+        displayName:
+          type: string
+        sourceFileName:
+          type: string
+        sourceSha256:
+          type: string
+          description: Hex SHA-256 of the original source file or text when available.
+        rawInputSummary:
+          type: string
+        rawText:
+          type: string
+        rawPayloadJson:
+          type: object
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [entryType]
+            properties:
+              entryType:
+                type: string
+                enum: [expense, income]
+              entryDate:
+                type: string
+                format: date
+              amount:
+                type: integer
+              currency:
+                type: string
+                default: JPY
+              subjectUserId:
+                type: string
+              target:
+                type: string
+              categoryCodeGuess:
+                type: string
+              categoryNameGuess:
+                type: string
+              tags:
+                type: array
+                items:
+                  type: string
+              confidence:
+                type: number
+                minimum: 0
+                maximum: 1
+              memo:
+                type: string
+security:
+  - bearerAuth: []

@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["vitest/globals", "node", "@cloudflare/workers-types"],
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["tests/**/*.ts", "app/back/src/**/*.ts", "app/front/src/**/*.ts", "vite-env.d.ts"]
+}

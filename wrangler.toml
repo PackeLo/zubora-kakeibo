@@ -1,0 +1,20 @@
+name = "zubora-kakeibo"
+main = "app/back/src/worker/index.ts"
+compatibility_date = "2026-06-20"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "./app/front/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "zubora-kakeibo"
+database_id = "replace-with-cloudflare-d1-database-id"
+migrations_dir = "migrations"
+
+[vars]
+LIVE_COMPLETED_YEARS_TO_KEEP = "3"
+ADMIN_EMAILS = ""
+ALLOW_DEV_AUTH = "false"
