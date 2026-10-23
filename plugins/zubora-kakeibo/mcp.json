@@ -1,0 +1,17 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "zubora-kakeibo": {
+      "type": "streamable-http",
+      "url": "https://zubora-kakeibo.packagelockjson2525.workers.dev/mcp",
+      "extensions": {
+        "com.openai": {
+          "auth": {
+            "type": "oauth",
+            "baseScopes": ["kakeibo:read", "kakeibo:import", "kakeibo:assets:write", "offline_access"]
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 import type { AssetType, EntryType, SourceType } from "../domain/types";
 
-export interface ActionEntrySourceInput {
+export interface EntrySourceInput {
   sourceType: SourceType;
   displayName?: string | null;
   sourceFileName?: string | null;
@@ -8,10 +8,10 @@ export interface ActionEntrySourceInput {
   rawInputSummary?: string | null;
   rawText?: string | null;
   rawPayloadJson?: unknown;
-  items: ActionEntrySourceItemInput[];
+  items: EntrySourceItemInput[];
 }
 
-export interface ActionEntrySourceItemInput {
+export interface EntrySourceItemInput {
   entryType: EntryType;
   subjectUserId?: string | null;
   entryDate?: string | null;

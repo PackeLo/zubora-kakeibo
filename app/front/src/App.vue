@@ -26,9 +26,11 @@ import {
   type Entry,
   type EntrySourceItem,
   type FinancialAsset,
-  type Tag
+  type Tag,
+  type User
 } from "./api/client";
 import { createPieSlices, formatCurrency } from "./utils/chart";
+import SourceItemReview from "./components/SourceItemReview.vue";
 
 type Tab = "dashboard" | "entries" | "source-items" | "duplicates" | "assets" | "taxonomy" | "archives";
 
@@ -36,6 +38,8 @@ const activeTab = ref<Tab>("dashboard");
 const loading = ref(false);
 const notice = ref("");
 const error = ref("");
+const currentUser = ref<User | null>(null);
+const users = ref<User[]>([]);
 
 const taxonomy = reactive<{ categories: Category[]; incomeCategories: Category[]; tags: Tag[] }>({
   categories: [],
@@ -65,7 +69,7 @@ const entryForm = reactive({
   entryType: "expense" as "expense" | "income",
   entryDate: today,
   amount: 0,
-  subjectUserId: "usr_local_example_test",
+  subjectUserId: "",
   categoryId: "",
   tagIds: [] as string[],
   target: "",
@@ -90,7 +94,7 @@ const tagForm = reactive({
 
 const assetForm = reactive({
   id: "",
-  ownerUserId: "usr_local_example_test",
+  ownerUserId: "",
   name: "",
   assetType: "bank_deposit",
   quantityText: "",
@@ -141,14 +145,21 @@ onMounted(() => {
 
 async function refreshAll() {
   await run(async () => {
-    const [tx, entryRows, itemRows, days, categories, assetRows, archiveRows] = await Promise.all([
+    const me = await apiGet<User>("/api/me");
+    if (!currentUser.value) {
+      entryForm.subjectUserId = me.id;
+      assetForm.ownerUserId = me.id;
+    }
+    currentUser.value = me;
+    const [tx, entryRows, itemRows, days, categories, assetRows, archiveRows, userRows] = await Promise.all([
       apiGet<typeof taxonomy>("/api/taxonomy", { includeInactive: true }),
       apiGet<{ items: Entry[] }>("/api/entries", buildFilterQuery()),
       apiGet<{ items: EntrySourceItem[] }>("/api/entry-source-items", { status: "pending", type: filters.type }),
       apiGet<{ days: DailySummary[] }>("/api/summaries/daily", buildFilterQuery()),
       apiGet<{ items: CategorySummary[] }>("/api/summaries/category", buildFilterQuery()),
       apiGet<{ items: FinancialAsset[] }>("/api/financial-assets"),
-      apiGet<{ items: any[] }>("/api/admin/archive-years").catch(() => ({ items: [] }))
+      me.role === "admin" ? apiGet<{ items: any[] }>("/api/admin/archive-years") : Promise.resolve({ items: [] }),
+      apiGet<{ items: User[] }>("/api/users")
     ]);
     taxonomy.categories = tx.categories;
     taxonomy.incomeCategories = tx.incomeCategories;
@@ -159,6 +170,7 @@ async function refreshAll() {
     categorySummary.value = categories.items;
     assets.value = assetRows.items;
     archives.value = archiveRows.items;
+    users.value = userRows.items;
   });
 }
 
@@ -182,23 +194,6 @@ async function saveEntry() {
 async function deleteEntry(id: string) {
   await run(async () => {
     await apiDelete(`/api/entries/${id}`);
-    await refreshAll();
-  });
-}
-
-async function postSourceItem(item: EntrySourceItem) {
-  await run(async () => {
-    await apiPost(`/api/entry-source-items/${item.id}/post`, {
-      entryType: item.entryType,
-      entryDate: item.entryDate,
-      amount: item.amount,
-      currency: item.currency,
-      subjectUserId: item.subjectUserId || entryForm.subjectUserId,
-      categoryId: item.categoryIdGuess,
-      tagIds: [],
-      target: item.target,
-      memo: item.memo
-    });
     await refreshAll();
   });
 }
@@ -284,7 +279,7 @@ async function saveAsset() {
     };
     if (assetForm.id) await apiPatch(`/api/financial-assets/${assetForm.id}`, body);
     else await apiPost("/api/financial-assets", body);
-    Object.assign(assetForm, { id: "", name: "", assetType: "bank_deposit", quantityText: "", valuationMinor: 0, currency: "JPY", valuationNote: "" });
+    Object.assign(assetForm, { id: "", ownerUserId: currentUser.value?.id ?? "", name: "", assetType: "bank_deposit", quantityText: "", valuationMinor: 0, currency: "JPY", valuationNote: "" });
     await refreshAll();
   });
 }
@@ -292,7 +287,7 @@ async function saveAsset() {
 function editAsset(asset: FinancialAsset) {
   Object.assign(assetForm, {
     id: asset.id,
-    ownerUserId: asset.ownerUserId ?? "usr_local_example_test",
+    ownerUserId: asset.ownerUserId ?? currentUser.value?.id ?? "",
     name: asset.name,
     assetType: asset.assetType,
     quantityText: asset.quantityText ?? "",
@@ -473,7 +468,10 @@ async function run(task: () => Promise<void>) {
           </select>
           <input v-model="entryForm.entryDate" type="date" required />
           <input v-model.number="entryForm.amount" type="number" min="1" placeholder="金額" required />
-          <input v-model="entryForm.subjectUserId" placeholder="対象ユーザーID" required />
+          <select v-model="entryForm.subjectUserId" name="manualSubjectUserId" aria-label="対象者" required>
+            <option value="">対象者を選んでね</option>
+            <option v-for="user in users" :key="user.id" :value="user.id">{{ user.displayName }}</option>
+          </select>
           <select v-model="entryForm.categoryId">
             <option value="">カテゴリなし</option>
             <option v-for="category in activeCategoriesForForm" :key="category.id" :value="category.id">{{ category.name }}</option>
@@ -508,25 +506,18 @@ async function run(task: () => Promise<void>) {
 
       <section v-if="activeTab === 'source-items'" class="panel list-panel">
         <h2><FolderInput :size="20" /> 登録元明細</h2>
-        <table>
-          <thead>
-            <tr><th>日付</th><th>種別</th><th>推定カテゴリ</th><th>用途</th><th>金額</th><th>信頼度</th><th></th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in sourceItems" :key="item.id">
-              <td>{{ item.entryDate }}</td>
-              <td>{{ item.entryType }}</td>
-              <td>{{ item.categoryNameGuess }}</td>
-              <td>{{ item.target }}</td>
-              <td>{{ item.amount == null ? "" : formatCurrency(item.amount) }}</td>
-              <td>{{ item.confidence ?? "" }}</td>
-              <td class="actions">
-                <button class="primary small" @click="postSourceItem(item)">entry化</button>
-                <button class="icon-button danger" title="削除" @click="deleteSourceItem(item.id)"><Trash2 :size="16" /></button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <p v-if="sourceItems.length === 0">確認待ちの明細はないよ。</p>
+        <SourceItemReview
+          v-for="item in sourceItems"
+          :key="item.id"
+          :item="item"
+          :categories="allCategories"
+          :tags="taxonomy.tags"
+          :users="users"
+          :default-subject-user-id="currentUser?.id ?? ''"
+          @changed="refreshAll"
+          @remove="deleteSourceItem(item.id)"
+        />
       </section>
 
       <section v-if="activeTab === 'duplicates'" class="panel list-panel">
@@ -548,6 +539,10 @@ async function run(task: () => Promise<void>) {
       <section v-if="activeTab === 'assets'" class="split">
         <form class="panel form" @submit.prevent="saveAsset">
           <h2><Database :size="20" /> 金融資産</h2>
+          <select v-model="assetForm.ownerUserId" name="assetOwnerUserId" aria-label="所有者" required>
+            <option value="">所有者を選んでね</option>
+            <option v-for="user in users" :key="user.id" :value="user.id">{{ user.displayName }}</option>
+          </select>
           <input v-model="assetForm.name" placeholder="資産名" required />
           <select v-model="assetForm.assetType">
             <option value="cash">現金</option>

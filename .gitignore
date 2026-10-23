@@ -7,6 +7,9 @@ AGENTS.md
 AGENTS.md.bak.*
 node_modules/
 app/front/dist/
+app/connection/dist/
 coverage/
 .wrangler/
 .dev.vars
+.env
+.env.*

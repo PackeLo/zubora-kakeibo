@@ -6,8 +6,9 @@ import { AppError, validationError } from "../../application/errors";
 import { DomainValidationError } from "../../domain/errors";
 import { daysBetween } from "../../domain/dates";
 import { requireActionToken, requireAdmin, webActor } from "../auth/auth";
+import { createUseCases } from "../../worker/bootstrap";
 import {
-  actionEntrySourceSchema,
+  entrySourceSchema,
   categorySchema,
   categoryUpdateSchema,
   confirmExternalBackupSchema,
@@ -43,7 +44,7 @@ export function createApiApp(factory: (env: Env) => UnitOfWork) {
     if (err instanceof DomainValidationError) {
       return c.json({ error: "VALIDATION_ERROR", message: err.message, details: null }, 400);
     }
-    console.error(err);
+    console.error(JSON.stringify({ event: "request_failed", method: c.req.method, path: c.req.path, errorType: err.name }));
     return c.json({ error: "INTERNAL_ERROR", message: "内部エラーが発生しました。", details: null }, 500);
   });
 
@@ -51,7 +52,7 @@ export function createApiApp(factory: (env: Env) => UnitOfWork) {
 
   app.use("/api/*", async (c, next) => {
     const repos = factory(c.env);
-    c.set("useCases", new KakeiboUseCases(repos, configFromEnv(c.env)));
+    c.set("useCases", createUseCases(repos, c.env));
     await next();
   });
 
@@ -61,7 +62,7 @@ export function createApiApp(factory: (env: Env) => UnitOfWork) {
       await next();
       return;
     }
-    const actor = webActor(c);
+    const actor = await webActor(c);
     c.set("actor", actor);
     await useCases(c).currentUser(actor);
     await next();
@@ -74,35 +75,35 @@ export function createApiApp(factory: (env: Env) => UnitOfWork) {
   app.get("/api/users", async (c) => c.json({ items: await useCases(c).listUsers() }));
 
   app.get("/api/action/taxonomy", async (c) => {
-    requireActionToken(c);
+    await requireActionToken(c);
     return c.json(await useCases(c).listTaxonomy(false));
   });
 
   app.post("/api/action/entry-sources", async (c) => {
-    const actor = requireActionToken(c);
-    const input = actionEntrySourceSchema.parse(await c.req.json());
+    const actor = await requireActionToken(c);
+    const input = entrySourceSchema.parse(await c.req.json());
     const idempotencyKey = c.req.header("Idempotency-Key");
-    return c.json(await useCases(c).createActionEntrySource(input, actor, idempotencyKey));
+    return c.json(await useCases(c).createEntrySource(input, actor, idempotencyKey));
   });
 
   app.get("/api/action/insights/overview", async (c) => {
-    requireActionToken(c);
-    return c.json(await useCases(c).actionOverview(actionPeriodFilters(c.req.query())));
+    await requireActionToken(c);
+    return c.json(await useCases(c).householdOverview(actionPeriodFilters(c.req.query())));
   });
 
   app.get("/api/action/insights/monthly", async (c) => {
-    requireActionToken(c);
+    await requireActionToken(c);
     return c.json({ months: await useCases(c).monthlySummary(actionPeriodFilters(c.req.query())) });
   });
 
   app.get("/api/action/insights/category", async (c) => {
-    requireActionToken(c);
+    await requireActionToken(c);
     return c.json(await useCases(c).categorySummary(actionPeriodFilters(c.req.query())));
   });
 
   app.get("/api/action/insights/entries", async (c) => {
-    requireActionToken(c);
-    return c.json({ items: await useCases(c).actionEntries(actionEntryFilters(c.req.query())) });
+    await requireActionToken(c);
+    return c.json({ items: await useCases(c).insightEntries(actionEntryFilters(c.req.query())) });
   });
 
   app.get("/api/taxonomy", async (c) => c.json(await useCases(c).listTaxonomy(c.req.query("includeInactive") === "true")));
@@ -135,8 +136,8 @@ export function createApiApp(factory: (env: Env) => UnitOfWork) {
   app.get("/api/entry-sources/:id", async (c) => c.json(await useCases(c).getEntrySource(c.req.param("id"))));
   app.post("/api/entry-sources", async (c) => {
     const actor = currentActor(c);
-    const input = actionEntrySourceSchema.parse(await c.req.json());
-    return c.json(await useCases(c).createActionEntrySource(input, actor, c.req.header("Idempotency-Key")), 201);
+    const input = entrySourceSchema.parse(await c.req.json());
+    return c.json(await useCases(c).createEntrySource(input, actor, c.req.header("Idempotency-Key")), 201);
   });
   app.patch("/api/entry-sources/:id", async (c) => {
     const actor = currentActor(c);
@@ -279,12 +280,6 @@ function assertDateSpan(from: string, to: string, maxDays: number) {
   if (daysBetween(from, to) > maxDays) {
     validationError(`date range must be ${maxDays} days or less`);
   }
-}
-
-function configFromEnv(env: Env) {
-  return {
-    liveCompletedYearsToKeep: Number(env.LIVE_COMPLETED_YEARS_TO_KEEP ?? 3)
-  };
 }
 
 async function gzipString(input: string): Promise<ReadableStream | Uint8Array> {

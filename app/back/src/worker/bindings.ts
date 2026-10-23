@@ -1,8 +1,9 @@
-export interface Env {
-  DB: D1Database;
-  ASSETS?: Fetcher;
-  GPT_ACTION_TOKEN?: string;
-  ADMIN_EMAILS?: string;
-  ALLOW_DEV_AUTH?: string;
-  LIVE_COMPLETED_YEARS_TO_KEEP?: string;
-}
+/// <reference path="./generated-env.d.ts" />
+
+import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
+
+type OptionalBinding = "ASSETS" | "OAUTH_KV" | "PUBLIC_ORIGIN" | "GPT_ACTION_TOKEN" | "ADMIN_EMAILS" | "HOUSEHOLD_EMAILS" | "CF_ACCESS_TEAM_DOMAIN" | "CF_ACCESS_AUD" | "SITES_TOKEN_ISSUER" | "SITES_TOKEN_PUBLIC_JWK";
+
+export type Env = Omit<WorkerBindings, OptionalBinding> & Partial<Pick<WorkerBindings, OptionalBinding>> & {
+  OAUTH_PROVIDER?: OAuthHelpers;
+};

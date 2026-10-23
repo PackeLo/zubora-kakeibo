@@ -3,11 +3,7 @@ info:
   title: Zubora Kakeibo GPT Actions
   version: 0.1.0
 servers:
-  - url: https://{workerDomain}
-    variables:
-      workerDomain:
-        default: zubora-kakeibo.example.workers.dev
-        description: Replace with the deployed Cloudflare Workers domain.
+  - url: https://zubora-kakeibo.packagelockjson2525.workers.dev
 paths:
   /api/action/taxonomy:
     get:
@@ -60,8 +56,20 @@ paths:
       summary: Get household overview for a period of 1461 days or less
       x-openai-isConsequential: false
       parameters:
-        - $ref: "#/components/parameters/From"
-        - $ref: "#/components/parameters/To"
+        - in: query
+          name: from
+          required: true
+          schema:
+            type: string
+            format: date
+            description: Start date. GPT insight endpoints reject ranges longer than their documented maximum.
+        - in: query
+          name: to
+          required: true
+          schema:
+            type: string
+            format: date
+            description: End date. Must be greater than or equal to from.
       responses:
         "200":
           description: Overview summary
@@ -71,8 +79,20 @@ paths:
       summary: Get monthly cashflow for a period of 1461 days or less
       x-openai-isConsequential: false
       parameters:
-        - $ref: "#/components/parameters/From"
-        - $ref: "#/components/parameters/To"
+        - in: query
+          name: from
+          required: true
+          schema:
+            type: string
+            format: date
+            description: Start date. GPT insight endpoints reject ranges longer than their documented maximum.
+        - in: query
+          name: to
+          required: true
+          schema:
+            type: string
+            format: date
+            description: End date. Must be greater than or equal to from.
       responses:
         "200":
           description: Monthly summary
@@ -82,12 +102,44 @@ paths:
       summary: Get category totals for a period of 1461 days or less
       x-openai-isConsequential: false
       parameters:
-        - $ref: "#/components/parameters/EntryType"
-        - $ref: "#/components/parameters/From"
-        - $ref: "#/components/parameters/To"
-        - $ref: "#/components/parameters/CategoryIds"
-        - $ref: "#/components/parameters/TagIds"
-        - $ref: "#/components/parameters/SubjectUserIds"
+        - in: query
+          name: type
+          required: false
+          schema:
+            type: string
+            enum: [expense, income]
+        - in: query
+          name: from
+          required: true
+          schema:
+            type: string
+            format: date
+            description: Start date. GPT insight endpoints reject ranges longer than their documented maximum.
+        - in: query
+          name: to
+          required: true
+          schema:
+            type: string
+            format: date
+            description: End date. Must be greater than or equal to from.
+        - in: query
+          name: categoryIds
+          required: false
+          schema:
+            type: string
+            description: Comma-separated category IDs
+        - in: query
+          name: tagIds
+          required: false
+          schema:
+            type: string
+            description: Comma-separated tag IDs
+        - in: query
+          name: subjectUserIds
+          required: false
+          schema:
+            type: string
+            description: Comma-separated subject user IDs
       responses:
         "200":
           description: Category summary
@@ -97,12 +149,44 @@ paths:
       summary: Get limited entries for household consultation over 400 days or less
       x-openai-isConsequential: false
       parameters:
-        - $ref: "#/components/parameters/EntryType"
-        - $ref: "#/components/parameters/From"
-        - $ref: "#/components/parameters/To"
-        - $ref: "#/components/parameters/CategoryIds"
-        - $ref: "#/components/parameters/TagIds"
-        - $ref: "#/components/parameters/SubjectUserIds"
+        - in: query
+          name: type
+          required: false
+          schema:
+            type: string
+            enum: [expense, income]
+        - in: query
+          name: from
+          required: true
+          schema:
+            type: string
+            format: date
+            description: Start date. GPT insight endpoints reject ranges longer than their documented maximum.
+        - in: query
+          name: to
+          required: true
+          schema:
+            type: string
+            format: date
+            description: End date. Must be greater than or equal to from.
+        - in: query
+          name: categoryIds
+          required: false
+          schema:
+            type: string
+            description: Comma-separated category IDs
+        - in: query
+          name: tagIds
+          required: false
+          schema:
+            type: string
+            description: Comma-separated tag IDs
+        - in: query
+          name: subjectUserIds
+          required: false
+          schema:
+            type: string
+            description: Comma-separated subject user IDs
         - in: query
           name: limit
           required: true
@@ -118,51 +202,6 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-  parameters:
-    EntryType:
-      in: query
-      name: type
-      required: false
-      schema:
-        type: string
-        enum: [expense, income]
-    From:
-      in: query
-      name: from
-      required: true
-      schema:
-        type: string
-        format: date
-        description: Start date. GPT insight endpoints reject ranges longer than their documented maximum.
-    To:
-      in: query
-      name: to
-      required: true
-      schema:
-        type: string
-        format: date
-        description: End date. Must be greater than or equal to from.
-    CategoryIds:
-      in: query
-      name: categoryIds
-      required: false
-      schema:
-        type: string
-        description: Comma-separated category IDs
-    TagIds:
-      in: query
-      name: tagIds
-      required: false
-      schema:
-        type: string
-        description: Comma-separated tag IDs
-    SubjectUserIds:
-      in: query
-      name: subjectUserIds
-      required: false
-      schema:
-        type: string
-        description: Comma-separated subject user IDs
   schemas:
     TaxonomyResponse:
       type: object

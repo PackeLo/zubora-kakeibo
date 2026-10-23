@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "zubora-kakeibo",
+  "version": "0.2.0",
+  "description": "家族の家計簿の取り込み、集計、分類と金融資産の管理。",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "ズボラ家計簿",
+        "shortDescription": "家計を記録・集計し、分類と金融資産を管理する。",
+        "capabilities": ["Read", "Write"],
+        "defaultPrompt": [
+          "家計簿のカテゴリとタグを確認して。",
+          "このレシートを家計簿の下書きに登録して。",
+          "今月の支出をまとめて。"
+        ]
+      }
+    }
+  }
+}

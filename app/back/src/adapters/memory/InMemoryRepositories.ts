@@ -1,6 +1,6 @@
 import type { Actor, ArchiveExport, ArchiveYear, Category, DuplicateExclusion, Entry, EntryFilters, EntrySource, EntrySourceItem, EntryType, EntryWithDetails, FinancialAsset, SourceType, SummaryFilters, Tag, User } from "../../domain/types";
 import type {
-  ActionOverview,
+  HouseholdOverview,
   ArchiveRepository,
   CategorySummary,
   DailySummary,
@@ -19,13 +19,17 @@ import { daysBetween, monthOf, nowIso } from "../../domain/dates";
 
 export class InMemoryUnitOfWork implements UnitOfWork {
   users = new MemoryUserRepository();
-  taxonomy = new MemoryTaxonomyRepository();
+  taxonomy = new MemoryTaxonomyRepository(() => ({
+    entries: [...this.entries.rows.values()],
+    items: [...this.entrySourceItems.rows.values()],
+    entryTags: [...this.entries.entryTags.values()]
+  }));
   entrySources = new MemoryEntrySourceRepository();
   entrySourceItems = new MemoryEntrySourceItemRepository();
   duplicates = new MemoryDuplicateRepository();
   financialAssets = new MemoryFinancialAssetRepository();
   archives = new MemoryArchiveRepository();
-  entries: EntryRepository;
+  entries: MemoryEntryRepository;
   summaries: SummaryRepository;
 
   constructor() {
@@ -67,10 +71,7 @@ class MemoryUserRepository implements UserRepository {
 class MemoryTaxonomyRepository implements TaxonomyRepository {
   categories = new Map<string, Category>();
   tags = new Map<string, Tag>();
-  entryCategoryRefs = new Map<string, number>();
-  sourceItemCategoryRefs = new Map<string, number>();
-  tagRefs = new Map<string, number>();
-  sourceItemTagRefs = new Map<string, number>();
+  constructor(private readonly references: () => { entries: Entry[]; items: EntrySourceItem[]; entryTags: string[][] }) {}
 
   async listCategories(includeInactive = false): Promise<Category[]> {
     return [...this.categories.values()].filter((row) => includeInactive || row.isActive).sort((a, b) => a.kind.localeCompare(b.kind) || a.sortOrder - b.sortOrder);
@@ -110,9 +111,10 @@ class MemoryTaxonomyRepository implements TaxonomyRepository {
   }
 
   async countCategoryReferences(id: string) {
+    const rows = this.references();
     return {
-      entries: this.entryCategoryRefs.get(id) ?? 0,
-      entrySourceItems: this.sourceItemCategoryRefs.get(id) ?? 0
+      entries: rows.entries.filter((entry) => entry.categoryId === id).length,
+      entrySourceItems: rows.items.filter((item) => item.categoryIdGuess === id).length
     };
   }
 
@@ -133,10 +135,11 @@ class MemoryTaxonomyRepository implements TaxonomyRepository {
     this.tags.delete(id);
   }
 
-  async countTagReferences(id: string) {
+  async countTagReferences(id: string, name: string) {
+    const rows = this.references();
     return {
-      entries: this.tagRefs.get(id) ?? 0,
-      entrySourceItems: this.sourceItemTagRefs.get(id) ?? 0
+      entries: rows.entryTags.filter((ids) => ids.includes(id)).length,
+      entrySourceItems: rows.items.filter((item) => (JSON.parse(item.tagsJson ?? "[]") as string[]).includes(name)).length
     };
   }
 }
@@ -259,8 +262,6 @@ class MemoryEntryRepository implements EntryRepository {
   async create(entry: Entry, tagIds: string[]): Promise<EntryWithDetails> {
     this.rows.set(entry.id, entry);
     this.entryTags.set(entry.id, tagIds);
-    if (entry.categoryId) this.taxonomy.entryCategoryRefs.set(entry.categoryId, (this.taxonomy.entryCategoryRefs.get(entry.categoryId) ?? 0) + 1);
-    for (const tagId of tagIds) this.taxonomy.tagRefs.set(tagId, (this.taxonomy.tagRefs.get(tagId) ?? 0) + 1);
     return this.withDetails(entry);
   }
 
@@ -402,7 +403,7 @@ class MemorySummaryRepository implements SummaryRepository {
     return this.monthly({ from: `${year}-01-01`, to: `${year}-12-31` });
   }
 
-  async actionOverview(filters: SummaryFilters): Promise<ActionOverview> {
+  async householdOverview(filters: SummaryFilters): Promise<HouseholdOverview> {
     const monthly = await this.monthly(filters);
     const topExpenseCategories = await this.category({ ...filters, type: "expense" });
     const incomeTotal = monthly.reduce((sum, row) => sum + row.incomeTotal, 0);

@@ -5,15 +5,18 @@
   "type": "module",
   "packageManager": "pnpm@9.15.4",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --var ALLOW_DEV_AUTH:true --var PUBLIC_ORIGIN:http://localhost:8787",
     "dev:front": "vite --config app/front/vite.config.ts",
     "build": "corepack pnpm build:front && corepack pnpm build:back",
     "build:front": "vite build --config app/front/vite.config.ts",
     "build:back": "tsc -p tsconfig.worker.json --noEmit",
+    "build:connection": "node scripts/build-connection.mjs",
+    "typecheck:connection": "tsc -p tsconfig.connection.json --noEmit",
     "typecheck": "corepack pnpm typecheck:back && corepack pnpm typecheck:front && corepack pnpm typecheck:test",
     "typecheck:back": "tsc -p tsconfig.worker.json --noEmit",
     "typecheck:front": "vue-tsc -p tsconfig.front.json --noEmit",
     "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
+    "types:generate": "wrangler types app/back/src/worker/generated-env.d.ts --env-interface WorkerBindings --include-runtime false --strict-vars false",
     "test": "vitest run",
     "test:watch": "vitest",
     "deploy": "corepack pnpm build && wrangler deploy",
@@ -21,11 +24,16 @@
     "db:migrate:prod": "wrangler d1 migrations apply zubora-kakeibo --remote"
   },
   "dependencies": {
+    "@cloudflare/workers-oauth-provider": "1.2.4",
+    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/server": "2.3.1",
     "@vitejs/plugin-vue": "^5.2.1",
     "hono": "^4.6.17",
+    "agents": "0.30.0",
+    "jose": "^6.0.0",
     "lucide-vue-next": "^0.468.0",
     "vue": "^3.5.13",
-    "zod": "^3.24.1"
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241230.0",

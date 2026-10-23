@@ -12,6 +12,28 @@ function createUseCases() {
 }
 
 describe("kakeibo use cases", () => {
+  it("rejects duplicate classification identities and changing the kind of a used category", async () => {
+    const { useCases } = createUseCases();
+    const category = await useCases.createCategory({ code: "identity", name: "分類", kind: "expense" }, actor);
+    await expect(useCases.createCategory({ code: "identity", name: "別分類", kind: "income" }, actor)).rejects.toMatchObject({ code: "CONFLICT" });
+    const tag = await useCases.createTag({ name: "同じタグ" });
+    await expect(useCases.createTag({ name: "同じタグ" })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await useCases.updateTag(tag.id, { name: "同じタグ" })).toMatchObject({ name: "同じタグ" });
+    await useCases.createEntrySource({ sourceType: "receipt", items: [{ entryType: "expense", categoryCodeGuess: "identity" }] }, actor);
+    await expect(useCases.updateCategory(category.id, { kind: "income" }, actor)).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await useCases.updateCategory(category.id, { name: "更新した分類" }, actor)).toMatchObject({ name: "更新した分類", kind: "expense" });
+  });
+
+  it("returns not found when deleting an unknown financial asset", async () => {
+    const { useCases } = createUseCases();
+    await expect(useCases.deleteFinancialAsset("missing", actor)).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("rejects an unknown financial asset owner", async () => {
+    const { useCases } = createUseCases();
+    await expect(useCases.createFinancialAsset({ name: "預金", assetType: "bank_deposit", ownerUserId: "unknown-user" }, actor)).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
   it("creates manual entry with manual source and source item", async () => {
     const { repos, useCases } = createUseCases();
     const category = await useCases.createCategory({ code: "food", name: "食費", kind: "expense" }, actor);
@@ -39,7 +61,7 @@ describe("kakeibo use cases", () => {
 
   it("keeps ChatGPT action entry source items pending", async () => {
     const { repos, useCases } = createUseCases();
-    const result = await useCases.createActionEntrySource(
+    const result = await useCases.createEntrySource(
       {
         sourceType: "receipt",
         displayName: "レシート",

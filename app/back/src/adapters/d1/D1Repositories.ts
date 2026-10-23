@@ -1,6 +1,6 @@
 import type { Actor, Category, Entry, EntryFilters, EntrySource, EntrySourceItem, EntryType, FinancialAsset, SummaryFilters, Tag, User } from "../../domain/types";
 import type {
-  ActionOverview,
+  HouseholdOverview,
   ArchiveRepository,
   CategorySummary,
   DailySummary,
@@ -214,8 +214,7 @@ class D1TaxonomyRepository implements TaxonomyRepository {
 
   async countTagReferences(id: string, name: string) {
     const entries = await this.db.prepare("SELECT COUNT(*) AS count FROM entry_tags WHERE tag_id = ?").bind(id).first<{ count: number }>();
-    const like = `%${name}%`;
-    const items = await this.db.prepare("SELECT COUNT(*) AS count FROM entry_source_items WHERE tags_json LIKE ?").bind(like).first<{ count: number }>();
+    const items = await this.db.prepare("SELECT COUNT(*) AS count FROM entry_source_items WHERE EXISTS (SELECT 1 FROM json_each(COALESCE(tags_json, '[]')) WHERE json_each.value = ?)").bind(name).first<{ count: number }>();
     return { entries: Number(entries?.count ?? 0), entrySourceItems: Number(items?.count ?? 0) };
   }
 }
@@ -804,7 +803,7 @@ class D1SummaryRepository implements SummaryRepository {
     return this.monthly({ from: `${year}-01-01`, to: `${year}-12-31` });
   }
 
-  async actionOverview(filters: SummaryFilters): Promise<ActionOverview> {
+  async householdOverview(filters: SummaryFilters): Promise<HouseholdOverview> {
     const [monthly, topExpenseCategories, topTags, subjectRows] = await Promise.all([
       this.monthly(filters),
       this.category({ ...filters, type: "expense" }),

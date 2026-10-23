@@ -23,7 +23,7 @@ import type {
 import type { UnitOfWork } from "../ports/repositories";
 import { AppError, notFound, validationError } from "./errors";
 import type {
-  ActionEntrySourceInput,
+  EntrySourceInput,
   CategoryInput,
   ConfirmExternalBackupInput,
   EntryUpdateInput,
@@ -63,6 +63,7 @@ export class KakeiboUseCases {
   }
 
   async createCategory(input: CategoryInput, actor: Actor): Promise<Category> {
+    if (await this.repos.taxonomy.findCategoryByCode(input.code.trim())) throw new AppError("CONFLICT", "category code already exists");
     const now = nowIso();
     return this.repos.taxonomy.createCategory({
       id: newId("cat"),
@@ -82,6 +83,13 @@ export class KakeiboUseCases {
   async updateCategory(id: string, input: Partial<CategoryInput>, actor: Actor): Promise<Category> {
     const existing = await this.repos.taxonomy.findCategoryById(id);
     if (!existing) notFound("category not found");
+    if (input.code !== undefined && input.code.trim() !== existing.code && await this.repos.taxonomy.findCategoryByCode(input.code.trim())) {
+      throw new AppError("CONFLICT", "category code already exists");
+    }
+    if (input.kind !== undefined && input.kind !== existing.kind) {
+      const references = await this.repos.taxonomy.countCategoryReferences(id);
+      if (references.entries > 0 || references.entrySourceItems > 0) throw new AppError("CONFLICT", "使用中のカテゴリの収入・支出種別は変更できません。");
+    }
     return this.repos.taxonomy.updateCategory(id, {
       code: input.code?.trim(),
       name: input.name?.trim(),
@@ -111,6 +119,7 @@ export class KakeiboUseCases {
   }
 
   async createTag(input: TagInput): Promise<Tag> {
+    if ((await this.repos.taxonomy.listTags(true)).some((tag) => tag.name === input.name.trim())) throw new AppError("CONFLICT", "tag name already exists");
     const now = nowIso();
     return this.repos.taxonomy.createTag({
       id: newId("tag"),
@@ -124,6 +133,10 @@ export class KakeiboUseCases {
   async updateTag(id: string, input: Partial<TagInput>): Promise<Tag> {
     const existing = await this.repos.taxonomy.findTagById(id);
     if (!existing) notFound("tag not found");
+    const newName = input.name?.trim();
+    if (newName !== undefined && (await this.repos.taxonomy.listTags(true)).some((tag) => tag.id !== id && tag.name === newName)) {
+      throw new AppError("CONFLICT", "tag name already exists");
+    }
     return this.repos.taxonomy.updateTag(id, {
       name: input.name?.trim(),
       isActive: input.isActive,
@@ -143,7 +156,7 @@ export class KakeiboUseCases {
     return { mode: "deactivated" as const, references };
   }
 
-  async createActionEntrySource(input: ActionEntrySourceInput, actor: Actor, idempotencyKey?: string | null) {
+  async createEntrySource(input: EntrySourceInput, actor: Actor, idempotencyKey?: string | null) {
     const existing = idempotencyKey ? await this.repos.entrySources.findByIdempotencyKey(idempotencyKey) : null;
     if (existing) {
       const items = await this.repos.entrySourceItems.listBySourceId(existing.id);
@@ -427,6 +440,7 @@ export class KakeiboUseCases {
   }
 
   async createFinancialAsset(input: FinancialAssetInput, actor: Actor): Promise<FinancialAsset> {
+    if (input.ownerUserId != null && !await this.repos.users.findById(input.ownerUserId)) validationError("financial asset owner not found");
     const now = nowIso();
     return this.repos.financialAssets.create({
       id: newId("fa"),
@@ -449,6 +463,7 @@ export class KakeiboUseCases {
   async updateFinancialAsset(id: string, input: Partial<FinancialAssetInput>, actor: Actor): Promise<FinancialAsset> {
     const existing = await this.repos.financialAssets.findById(id);
     if (!existing) notFound("financial asset not found");
+    if (input.ownerUserId != null && !await this.repos.users.findById(input.ownerUserId)) validationError("financial asset owner not found");
     return this.repos.financialAssets.update(id, {
       ownerUserId: input.ownerUserId,
       name: input.name?.trim(),
@@ -464,6 +479,7 @@ export class KakeiboUseCases {
   }
 
   async deleteFinancialAsset(id: string, actor: Actor) {
+    if (!await this.repos.financialAssets.findById(id)) notFound("financial asset not found");
     return this.repos.financialAssets.deactivate(id, actor, nowIso());
   }
 
@@ -487,13 +503,13 @@ export class KakeiboUseCases {
     return this.repos.summaries.cashflow(year);
   }
 
-  async actionOverview(filters: SummaryFilters) {
+  async householdOverview(filters: SummaryFilters) {
     if (!filters.from || !filters.to) validationError("from and to are required");
     await this.assertNotPurged(filters.from, filters.to);
-    return this.repos.summaries.actionOverview(filters);
+    return this.repos.summaries.householdOverview(filters);
   }
 
-  async actionEntries(filters: EntryFilters) {
+  async insightEntries(filters: EntryFilters) {
     if (!filters.from || !filters.to || !filters.limit) {
       validationError("from, to and limit are required");
     }

@@ -4,6 +4,24 @@ export interface ApiError {
   details?: unknown;
 }
 
+export interface User {
+  id: string;
+  displayName: string;
+  role: "admin" | "member";
+}
+
+export interface PostSourceItemInput {
+  entryType: "expense" | "income";
+  entryDate: string;
+  amount: number;
+  currency: string;
+  subjectUserId: string;
+  categoryId: string | null;
+  tagIds: string[];
+  target: string | null;
+  memo: string | null;
+}
+
 export async function apiGet<T>(path: string, query?: Record<string, unknown>): Promise<T> {
   const url = new URL(path, location.origin);
   for (const [key, value] of Object.entries(query ?? {})) {

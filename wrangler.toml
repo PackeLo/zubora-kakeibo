@@ -1,20 +1,44 @@
 name = "zubora-kakeibo"
+account_id = "d0ceef702a503866c806d0020a7ec4ad"
 main = "app/back/src/worker/index.ts"
 compatibility_date = "2026-06-20"
-compatibility_flags = ["nodejs_compat"]
+compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
+workers_dev = true
+preview_urls = false
+
+[secrets]
+required = ["GPT_ACTION_TOKEN", "ADMIN_EMAILS", "HOUSEHOLD_EMAILS", "CF_ACCESS_TEAM_DOMAIN", "CF_ACCESS_AUD"]
+
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 0.1
 
 [assets]
 directory = "./app/front/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/mcp", "/authorize", "/oauth/*", "/.well-known/*"]
+
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "6c085821bc384b4d8b60d9f18e5e2416"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "zubora-kakeibo"
-database_id = "replace-with-cloudflare-d1-database-id"
+database_id = "33aaeeb1-d9d7-45c4-a2f7-aaca83c87d7f"
 migrations_dir = "migrations"
 
 [vars]
 LIVE_COMPLETED_YEARS_TO_KEEP = "3"
-ADMIN_EMAILS = ""
 ALLOW_DEV_AUTH = "false"
+PUBLIC_ORIGIN = "https://zubora-kakeibo.packagelockjson2525.workers.dev"
+SITES_TOKEN_ISSUER = "https://zubora-kakeibo-mobile.workspace-994831.chatgpt.site"
+SITES_TOKEN_PUBLIC_JWK = '{"kty":"EC","x":"xqRigGMsH6lcbFwg8XQxiNrLcT3JYsEb03s102SvGHU","y":"m3dP30DOewR0NYKZ9taX9Mw6LPBohfjMWS8FsWd0TNo","crv":"P-256","kid":"kakeibo-sites-20261024"}'

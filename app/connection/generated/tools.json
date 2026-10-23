@@ -1,0 +1,1839 @@
+{
+  "instructions": "家族の家計簿。分類前にgetTaxonomy、所有者を指定する前にlistUsersを呼ぶ。日付・金額が不明なら推測せず質問する。createEntrySourceは確認待ちの下書きを作る。確定は管理画面で行う。変更前に対象・変更内容を確認し、削除はIDと名前を提示して明示的な同意を得る。使用中のカテゴリ・タグと金融資産の削除は無効化になる。成功応答のIDと結果を確認して案内し、失敗した操作を成功扱いにしない。同じ取り込みの再送には同じidempotencyKeyを使う。",
+  "tools": [
+    {
+      "name": "getTaxonomy",
+      "description": "有効なカテゴリ・タグを取得する。管理用にはincludeInactiveで無効な分類も取得できる。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "includeInactive": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "code": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "expense",
+                    "income"
+                  ]
+                },
+                "sortOrder": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "dedupeEnabled": {
+                  "type": "boolean"
+                },
+                "isActive": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "code",
+                "name",
+                "kind",
+                "sortOrder",
+                "dedupeEnabled",
+                "isActive"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "incomeCategories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "code": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "expense",
+                    "income"
+                  ]
+                },
+                "sortOrder": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "dedupeEnabled": {
+                  "type": "boolean"
+                },
+                "isActive": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "code",
+                "name",
+                "kind",
+                "sortOrder",
+                "dedupeEnabled",
+                "isActive"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "isActive": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "isActive"
+              ],
+              "additionalProperties": {}
+            }
+          }
+        },
+        "required": [
+          "categories",
+          "incomeCategories",
+          "tags"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "listUsers",
+      "description": "金融資産の所有者・明細の対象者として指定できる家族のIDと名前を取得する。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "displayName": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "admin",
+                    "member"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "displayName",
+                "role"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "createEntrySource",
+      "description": "レシート等を確認待ちの下書きとして登録する。確定や集計反映は行わない。同じ再送には同じidempotencyKeyを指定する。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sourceType": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "receipt",
+              "order_detail",
+              "credit_card_statement",
+              "bank_statement",
+              "handwritten_note",
+              "other"
+            ]
+          },
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sourceFileName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sourceSha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rawInputSummary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rawText": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rawPayloadJson": {},
+          "items": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "entryType": {
+                  "type": "string",
+                  "enum": [
+                    "expense",
+                    "income"
+                  ]
+                },
+                "subjectUserId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "entryDate": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "amount": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "currency": {
+                  "default": "JPY",
+                  "type": "string"
+                },
+                "target": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "categoryCodeGuess": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "categoryNameGuess": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "confidence": {
+                  "anyOf": [
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "memo": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "entryType"
+              ]
+            }
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "sourceType",
+          "items"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "entrySourceId": {
+            "type": "string"
+          },
+          "createdEntrySourceItemIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "entrySourceId",
+          "createdEntrySourceItemIds",
+          "status"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "getInsightOverview",
+      "description": "1461日以内の指定期間について、家計の概要を取得する。確認待ちの明細は含まない。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "to": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "expense",
+              "income"
+            ]
+          },
+          "categoryIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tagIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "subjectUserIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "incomeTotal": {
+            "type": "number"
+          },
+          "expenseTotal": {
+            "type": "number"
+          },
+          "netCashflow": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "monthly": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "month": {
+                  "type": "string"
+                },
+                "incomeTotal": {
+                  "type": "number"
+                },
+                "expenseTotal": {
+                  "type": "number"
+                },
+                "netCashflow": {
+                  "type": "number"
+                },
+                "currency": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "month",
+                "incomeTotal",
+                "expenseTotal",
+                "netCashflow",
+                "currency"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "topExpenseCategories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "categoryId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "categoryName": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "number"
+                },
+                "entryCount": {
+                  "type": "number"
+                },
+                "currency": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "categoryId",
+                "categoryName",
+                "amount",
+                "entryCount",
+                "currency"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "topTags": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "tagId": {
+                  "type": "string"
+                },
+                "tagName": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "number"
+                },
+                "entryCount": {
+                  "type": "number"
+                },
+                "currency": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "tagId",
+                "tagName",
+                "amount",
+                "entryCount",
+                "currency"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "subjectUserTotals": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "subjectUserId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "incomeTotal": {
+                  "type": "number"
+                },
+                "expenseTotal": {
+                  "type": "number"
+                },
+                "netCashflow": {
+                  "type": "number"
+                },
+                "currency": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "subjectUserId",
+                "incomeTotal",
+                "expenseTotal",
+                "netCashflow",
+                "currency"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "incomeTotal",
+          "expenseTotal",
+          "netCashflow",
+          "currency",
+          "monthly",
+          "topExpenseCategories",
+          "topTags",
+          "subjectUserTotals"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "getMonthlyInsights",
+      "description": "1461日以内の指定期間について月別の収支を取得する。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "to": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "expense",
+              "income"
+            ]
+          },
+          "categoryIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tagIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "subjectUserIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "months": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "month": {
+                  "type": "string"
+                },
+                "incomeTotal": {
+                  "type": "number"
+                },
+                "expenseTotal": {
+                  "type": "number"
+                },
+                "netCashflow": {
+                  "type": "number"
+                },
+                "currency": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "month",
+                "incomeTotal",
+                "expenseTotal",
+                "netCashflow",
+                "currency"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "months"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "getCategoryInsights",
+      "description": "1461日以内の指定期間についてカテゴリ別集計を取得する。カテゴリ・タグ・対象者で絞り込める。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "to": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "expense",
+              "income"
+            ]
+          },
+          "categoryIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tagIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "subjectUserIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "categoryId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "categoryName": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "number"
+                },
+                "entryCount": {
+                  "type": "number"
+                },
+                "currency": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "categoryId",
+                "categoryName",
+                "amount",
+                "entryCount",
+                "currency"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "getInsightEntries",
+      "description": "400日以内の指定期間の確定明細を最大200件まで取得する。limitは必須。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "to": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "expense",
+              "income"
+            ]
+          },
+          "categoryIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tagIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "subjectUserIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "limit"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "entryType": {
+                  "type": "string",
+                  "enum": [
+                    "expense",
+                    "income"
+                  ]
+                },
+                "entryDate": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "number"
+                },
+                "currency": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "entryType",
+                "entryDate",
+                "amount",
+                "currency"
+              ],
+              "additionalProperties": {}
+            }
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "createCategory",
+      "description": "支出または収入のカテゴリを登録する。管理者のみ利用できる。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "expense",
+              "income"
+            ]
+          },
+          "sortOrder": {
+            "default": 0,
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "dedupeEnabled": {
+            "default": true,
+            "type": "boolean"
+          },
+          "isActive": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "kind"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "expense",
+              "income"
+            ]
+          },
+          "sortOrder": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "dedupeEnabled": {
+            "type": "boolean"
+          },
+          "isActive": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "name",
+          "kind",
+          "sortOrder",
+          "dedupeEnabled",
+          "isActive"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": {}
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "updateCategory",
+      "description": "指定IDのカテゴリの指定した項目だけを変更する。管理者のみ利用できる。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "expense",
+              "income"
+            ]
+          },
+          "sortOrder": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "dedupeEnabled": {
+            "type": "boolean"
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "expense",
+              "income"
+            ]
+          },
+          "sortOrder": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "dedupeEnabled": {
+            "type": "boolean"
+          },
+          "isActive": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "name",
+          "kind",
+          "sortOrder",
+          "dedupeEnabled",
+          "isActive"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": {}
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "deleteCategory",
+      "description": "指定IDのカテゴリを削除する。使用中は履歴を保つため無効化し、modeで結果を返す。対象名・IDを提示し、削除の同意を得てから呼ぶ。管理者のみ。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "deleted",
+              "deactivated"
+            ]
+          },
+          "references": {
+            "type": "object",
+            "properties": {
+              "entries": {
+                "type": "number"
+              },
+              "entrySourceItems": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "entries",
+              "entrySourceItems"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "mode",
+          "references"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "createTag",
+      "description": "タグを登録する。管理者のみ利用できる。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "isActive": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "isActive": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "isActive"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": {}
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "updateTag",
+      "description": "指定IDのタグの指定した項目だけを変更する。管理者のみ利用できる。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "isActive": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "isActive"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": {}
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "deleteTag",
+      "description": "指定IDのタグを削除する。使用中は無効化し、modeで結果を返す。対象名・IDを提示し、削除の同意を得てから呼ぶ。管理者のみ。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "deleted",
+              "deactivated"
+            ]
+          },
+          "references": {
+            "type": "object",
+            "properties": {
+              "entries": {
+                "type": "number"
+              },
+              "entrySourceItems": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "entries",
+              "entrySourceItems"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "mode",
+          "references"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "listFinancialAssets",
+      "description": "金融資産を取得する。includeInactiveで無効化済みの資産も取得できる。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "includeInactive": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "ownerUserId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "assetType": {
+                  "type": "string",
+                  "enum": [
+                    "cash",
+                    "bank_deposit",
+                    "investment_trust",
+                    "stock",
+                    "crypto",
+                    "pension",
+                    "other"
+                  ]
+                },
+                "quantityText": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "valuationMinor": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "currency": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "valuationNote": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "isActive": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "ownerUserId",
+                "name",
+                "assetType",
+                "quantityText",
+                "valuationMinor",
+                "currency",
+                "valuationNote",
+                "isActive"
+              ],
+              "additionalProperties": {}
+            }
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "createFinancialAsset",
+      "description": "家族の金融資産を登録する。金額はcurrencyの最小通貨単位の整数、JPYなら円。所有者の省略時はログイン本人。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ownerUserId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "assetType": {
+            "type": "string",
+            "enum": [
+              "cash",
+              "bank_deposit",
+              "investment_trust",
+              "stock",
+              "crypto",
+              "pension",
+              "other"
+            ]
+          },
+          "quantityText": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "valuationMinor": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "currency": {
+            "default": "JPY",
+            "type": "string",
+            "minLength": 1
+          },
+          "valuationNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "assetType"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "ownerUserId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "assetType": {
+            "type": "string",
+            "enum": [
+              "cash",
+              "bank_deposit",
+              "investment_trust",
+              "stock",
+              "crypto",
+              "pension",
+              "other"
+            ]
+          },
+          "quantityText": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "valuationMinor": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 1
+          },
+          "valuationNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "isActive": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "ownerUserId",
+          "name",
+          "assetType",
+          "quantityText",
+          "valuationMinor",
+          "currency",
+          "valuationNote",
+          "isActive"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": {}
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "updateFinancialAsset",
+      "description": "指定IDの金融資産の指定した項目だけを変更する。省略項目を初期値で上書きしない。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ownerUserId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "assetType": {
+            "type": "string",
+            "enum": [
+              "cash",
+              "bank_deposit",
+              "investment_trust",
+              "stock",
+              "crypto",
+              "pension",
+              "other"
+            ]
+          },
+          "quantityText": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "valuationMinor": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 1
+          },
+          "valuationNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "ownerUserId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "assetType": {
+            "type": "string",
+            "enum": [
+              "cash",
+              "bank_deposit",
+              "investment_trust",
+              "stock",
+              "crypto",
+              "pension",
+              "other"
+            ]
+          },
+          "quantityText": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "valuationMinor": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 1
+          },
+          "valuationNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "isActive": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "ownerUserId",
+          "name",
+          "assetType",
+          "quantityText",
+          "valuationMinor",
+          "currency",
+          "valuationNote",
+          "isActive"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": {}
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "deleteFinancialAsset",
+      "description": "指定IDの金融資産を無効化して有効な資産一覧から外す。物理削除しない。対象名・IDを提示し、削除の同意を得てから呼ぶ。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "ownerUserId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "assetType": {
+            "type": "string",
+            "enum": [
+              "cash",
+              "bank_deposit",
+              "investment_trust",
+              "stock",
+              "crypto",
+              "pension",
+              "other"
+            ]
+          },
+          "quantityText": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "valuationMinor": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 1
+          },
+          "valuationNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "isActive": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "ownerUserId",
+          "name",
+          "assetType",
+          "quantityText",
+          "valuationMinor",
+          "currency",
+          "valuationNote",
+          "isActive"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": {}
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    }
+  ]
+}

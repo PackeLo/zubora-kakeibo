@@ -103,7 +103,7 @@ export interface SummaryRepository {
   daily(filters: SummaryFilters): Promise<DailySummary[]>;
   category(filters: SummaryFilters): Promise<CategorySummary[]>;
   cashflow(year: number): Promise<MonthlySummary[]>;
-  actionOverview(filters: SummaryFilters): Promise<ActionOverview>;
+  householdOverview(filters: SummaryFilters): Promise<HouseholdOverview>;
 }
 
 export interface MonthlySummary {
@@ -131,7 +131,7 @@ export interface CategorySummary {
   currency: string;
 }
 
-export interface ActionOverview {
+export interface HouseholdOverview {
   from: string;
   to: string;
   incomeTotal: number;
