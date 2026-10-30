@@ -49,7 +49,7 @@ describe("Sites household connection", () => {
   it("uses the existing household user for authenticated category, tag, asset and import operations through both MCP servers", async () => {
     const f = await fixture();
     expect((await f.call("server/discover")).result).toMatchObject({ supportedVersions: ["2026-07-28"] });
-    expect((await f.call("tools/list", {}, null)).result?.tools).toHaveLength(17);
+    expect((await f.call("tools/list", {}, null)).result?.tools).toHaveLength(23);
     const category = await f.tool("createCategory", { code: "sites-test", name: "接続テスト", kind: "expense" });
     expect(await f.tool("updateCategory", { id: category.id, name: "接続テスト変更" })).toMatchObject({ name: "接続テスト変更" });
     const tag = await f.tool("createTag", { name: "接続テストタグ" });
@@ -62,6 +62,20 @@ describe("Sites household connection", () => {
     const receipt = await f.tool("createEntrySource", input);
     expect(await f.tool("createEntrySource", input)).toEqual(receipt);
     expect(await f.tool("getInsightOverview", { from: "2026-10-24", to: "2026-10-24" })).toMatchObject({ expenseTotal: 0 });
+    const receiptId = (receipt.createdEntrySourceItemIds as string[])[0];
+    expect(await f.tool("listEntrySourceItems")).toMatchObject({ items: [{ id: receiptId }] });
+    expect(await f.tool("updateEntrySourceItem", { id: receiptId, tags: ["接続テストタグ変更"], subjectUserId: "usr_existing_admin", amount: 125 })).toMatchObject({ amount: 125, tags: ["接続テストタグ変更"] });
+    expect(await f.tool("getEntrySourceItem", { id: receiptId })).toMatchObject({ status: "pending" });
+    expect((await f.call("tools/call", { name: "postEntrySourceItem", arguments: { id: receiptId } })).result?.isError).toBe(true);
+    const confident = await f.tool("createEntrySource", { sourceType: "receipt", items: [{ entryType: "income", subjectUserId: "usr_existing_admin", entryDate: "2026-10-24", amount: 500, confidence: 0.99 }] });
+    const confidentId = (confident.createdEntrySourceItemIds as string[])[0];
+    const posted = await f.tool("postEntrySourceItem", { id: confidentId });
+    expect(await f.tool("postEntrySourceItem", { id: confidentId })).toEqual(posted);
+    expect(await f.tool("getInsightOverview", { from: "2026-10-24", to: "2026-10-24" })).toMatchObject({ incomeTotal: 500, expenseTotal: 0 });
+    const ledger = await f.tool("getEntry", { id: posted.id });
+    const edited = await f.tool("updateEntry", { id: posted.id, expectedRevision: ledger.revision, amount: 625, memo: "編集済み" });
+    expect(edited).toMatchObject({ id: posted.id, amount: 625, memo: "編集済み" });
+    expect(await f.tool("getInsightOverview", { from: "2026-10-24", to: "2026-10-24" })).toMatchObject({ incomeTotal: 625, expenseTotal: 0 });
     expect(await f.tool("deleteCategory", { id: category.id })).toMatchObject({ mode: "deactivated" });
     expect(await f.tool("deleteTag", { id: tag.id })).toMatchObject({ mode: "deactivated" });
     expect(await f.household.repositories.users.listActive()).toHaveLength(1);
@@ -90,7 +104,7 @@ describe("Sites household connection", () => {
     const f = await fixture();
     const now = Math.floor(Date.now() / 1000);
     const client = await f.household.connect(await f.sign({ iat: now + 2, exp: now + 62 }));
-    try { expect((await client.listTools()).tools).toHaveLength(17); }
+    try { expect((await client.listTools()).tools).toHaveLength(23); }
     finally { await client.close(); }
   });
 

@@ -109,6 +109,7 @@ export interface EntrySourceItem {
 
 export interface Entry {
   id: string;
+  revision: string;
   entryType: EntryType;
   subjectUserId?: string | null;
   entryDate: string;
@@ -127,6 +128,7 @@ export interface Entry {
 }
 
 export interface EntryWithDetails extends Entry {
+  registeredBy?: { email: string; displayName: string } | null;
   category?: Category | null;
   tags: Tag[];
   source?: EntrySource | null;
@@ -219,7 +221,10 @@ export interface EntryFilters {
   to?: string;
   categoryIds?: string[];
   tagIds?: string[];
+  excludedCategoryIds?: string[];
+  excludedTagIds?: string[];
   subjectUserIds?: string[];
+  registeredByEmails?: string[];
   limit?: number;
 }
 

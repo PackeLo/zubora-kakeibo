@@ -6,9 +6,12 @@ export interface ApiError {
 
 export interface User {
   id: string;
+  email?: string;
   displayName: string;
   role: "admin" | "member";
 }
+
+export interface PersonProfile { email: string; displayName: string }
 
 export interface PostSourceItemInput {
   entryType: "expense" | "income";
@@ -81,6 +84,7 @@ export interface Tag {
 
 export interface Entry {
   id: string;
+  revision: string;
   entryType: "expense" | "income";
   subjectUserId: string | null;
   entryDate: string;
@@ -91,6 +95,8 @@ export interface Entry {
   memo: string | null;
   category?: Category | null;
   tags: Tag[];
+  registeredBy?: PersonProfile | null;
+  fixedAt?: string | null;
 }
 
 export interface EntrySourceItem {

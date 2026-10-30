@@ -1,11 +1,13 @@
 import { z } from "zod";
 import { entryTypeSchema } from "../contracts/resources";
+import { sourceItemPatchSchema } from "../contracts/entrySources";
 export {
   entryTypeSchema, sourceTypeSchema, assetTypeSchema,
   categorySchema, categoryUpdateSchema, tagSchema, tagUpdateSchema,
   financialAssetSchema, financialAssetUpdateSchema
 } from "../contracts/resources";
 export { entrySourceSchema } from "../contracts/entrySources";
+export { entryUpdateSchema } from "../contracts/entries";
 
 export const postEntrySourceItemSchema = z.object({
   entryType: entryTypeSchema,
@@ -23,18 +25,6 @@ export const manualEntrySchema = postEntrySourceItemSchema.extend({
   sourceDisplayName: z.string().nullable().optional()
 });
 
-export const entryUpdateSchema = z.object({
-  entryType: entryTypeSchema.optional(),
-  entryDate: z.string().optional(),
-  amount: z.number().int().positive().optional(),
-  currency: z.string().optional(),
-  subjectUserId: z.string().nullable().optional(),
-  categoryId: z.string().nullable().optional(),
-  tagIds: z.array(z.string()).optional(),
-  target: z.string().nullable().optional(),
-  memo: z.string().nullable().optional()
-});
-
 export const entrySourceUpdateSchema = z.object({
   displayName: z.string().nullable().optional(),
   sourceFileName: z.string().nullable().optional(),
@@ -42,15 +32,7 @@ export const entrySourceUpdateSchema = z.object({
   rawText: z.string().nullable().optional()
 });
 
-export const entrySourceItemUpdateSchema = z.object({
-  entryType: entryTypeSchema.optional(),
-  subjectUserId: z.string().nullable().optional(),
-  entryDate: z.string().nullable().optional(),
-  amount: z.number().int().nonnegative().nullable().optional(),
-  currency: z.string().optional(),
-  target: z.string().nullable().optional(),
-  categoryIdGuess: z.string().nullable().optional(),
-  categoryNameGuess: z.string().nullable().optional(),
+export const entrySourceItemUpdateSchema = sourceItemPatchSchema.omit({ tags: true }).extend({
   tagsJson: z.string().refine((value) => {
     try {
       const tags: unknown = JSON.parse(value);
@@ -58,10 +40,11 @@ export const entrySourceItemUpdateSchema = z.object({
     } catch {
       return false;
     }
-  }, "tagsJson must be a JSON array of tag names").nullable().optional(),
-  memo: z.string().nullable().optional(),
-  confidence: z.number().min(0).max(1).nullable().optional()
-});
+  }, "tagsJson must be a JSON array of tag names").nullable().optional()
+}).transform(({ tagsJson, ...patch }) => ({
+  ...patch,
+  ...(tagsJson === undefined ? {} : { tags: tagsJson == null ? [] : z.array(z.string()).parse(JSON.parse(tagsJson)) })
+}));
 
 export const markNotDuplicateSchema = z.object({
   entryId: z.string(),

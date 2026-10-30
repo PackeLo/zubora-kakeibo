@@ -58,21 +58,31 @@ export interface EntrySourceStatusResult {
 }
 
 export interface EntrySourceItemRepository {
-  list(filters: { status?: EntrySourceItem["status"]; type?: EntryType; from?: string; to?: string }): Promise<EntrySourceItem[]>;
+  list(filters: SourceItemFilters): Promise<EntrySourceItem[]>;
   listBySourceId(entrySourceId: string): Promise<EntrySourceItem[]>;
   findById(id: string): Promise<EntrySourceItem | null>;
   create(item: EntrySourceItem): Promise<EntrySourceItem>;
   update(id: string, patch: Partial<EntrySourceItem>): Promise<EntrySourceItem>;
+  updatePending(item: EntrySourceItem, expectedUpdatedAt: string): Promise<EntrySourceItem | null>;
   delete(id: string): Promise<void>;
   deleteBySourceId(entrySourceId: string): Promise<void>;
   countBySourceId(entrySourceId: string): Promise<number>;
+}
+
+export interface SourceItemFilters {
+  status?: EntrySourceItem["status"];
+  type?: EntryType;
+  from?: string;
+  to?: string;
+  entrySourceId?: string;
 }
 
 export interface EntryRepository {
   list(filters: EntryFilters): Promise<EntryWithDetails[]>;
   findById(id: string): Promise<EntryWithDetails | null>;
   create(entry: Entry, tagIds: string[]): Promise<EntryWithDetails>;
-  update(id: string, patch: Partial<Entry>, tagIds?: string[]): Promise<EntryWithDetails>;
+  postSourceItem(entry: Entry, tagIds: string[], item: EntrySourceItem, expectedUpdatedAt: string): Promise<EntryWithDetails | null>;
+  update(entry: Entry, expectedRevision: string, tagIds?: string[]): Promise<EntryWithDetails | null>;
   delete(id: string): Promise<void>;
   listDuplicateCandidates(input: {
     item: EntrySourceItem;

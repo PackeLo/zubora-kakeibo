@@ -8,6 +8,7 @@ import type {
   EntryRepository,
   EntrySourceItemRepository,
   EntrySourceRepository,
+  SourceItemFilters,
   FinancialAssetRepository,
   MonthlySummary,
   SummaryRepository,
@@ -24,7 +25,7 @@ export class InMemoryUnitOfWork implements UnitOfWork {
     items: [...this.entrySourceItems.rows.values()],
     entryTags: [...this.entries.entryTags.values()]
   }));
-  entrySources = new MemoryEntrySourceRepository();
+  entrySources = new MemoryEntrySourceRepository(() => [...this.entrySourceItems.rows.values()]);
   entrySourceItems = new MemoryEntrySourceItemRepository();
   duplicates = new MemoryDuplicateRepository();
   financialAssets = new MemoryFinancialAssetRepository();
@@ -146,6 +147,7 @@ class MemoryTaxonomyRepository implements TaxonomyRepository {
 
 class MemoryEntrySourceRepository implements EntrySourceRepository {
   rows = new Map<string, EntrySource>();
+  constructor(private readonly sourceItems: () => EntrySourceItem[]) {}
 
   async list(): Promise<EntrySource[]> {
     return [...this.rows.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -179,19 +181,24 @@ class MemoryEntrySourceRepository implements EntrySourceRepository {
   async refreshStatus(id: string) {
     const existing = this.rows.get(id);
     if (!existing) throw new Error("source not found");
-    return { sourceId: id, status: existing.status, remainingItems: 1 };
+    const items = this.sourceItems().filter((item) => item.entrySourceId === id);
+    const remainingItems = items.filter((item) => item.status === "pending").length;
+    const status: EntrySource["status"] = remainingItems === 0 ? "posted" : remainingItems === items.length ? "pending" : "partially_posted";
+    this.rows.set(id, { ...existing, status, updatedAt: nowIso() });
+    return { sourceId: id, status, remainingItems };
   }
 }
 
 class MemoryEntrySourceItemRepository implements EntrySourceItemRepository {
   rows = new Map<string, EntrySourceItem>();
 
-  async list(filters: { status?: EntrySourceItem["status"]; type?: EntryType; from?: string; to?: string }): Promise<EntrySourceItem[]> {
+  async list(filters: SourceItemFilters): Promise<EntrySourceItem[]> {
     return [...this.rows.values()].filter((item) => {
       if (filters.status && item.status !== filters.status) return false;
       if (filters.type && item.entryType !== filters.type) return false;
-      if (filters.from && item.entryDate && item.entryDate < filters.from) return false;
-      if (filters.to && item.entryDate && item.entryDate > filters.to) return false;
+      if (filters.entrySourceId && item.entrySourceId !== filters.entrySourceId) return false;
+      if (filters.from && (!item.entryDate || item.entryDate < filters.from)) return false;
+      if (filters.to && (!item.entryDate || item.entryDate > filters.to)) return false;
       return true;
     });
   }
@@ -225,6 +232,13 @@ class MemoryEntrySourceItemRepository implements EntrySourceItemRepository {
     for (const item of [...this.rows.values()]) if (item.entrySourceId === entrySourceId) this.rows.delete(item.id);
   }
 
+  async updatePending(item: EntrySourceItem, expectedUpdatedAt: string): Promise<EntrySourceItem | null> {
+    const existing = this.rows.get(item.id);
+    if (!existing || existing.status !== "pending" || existing.updatedAt !== expectedUpdatedAt) return null;
+    this.rows.set(item.id, item);
+    return item;
+  }
+
   async countBySourceId(entrySourceId: string): Promise<number> {
     return [...this.rows.values()].filter((item) => item.entrySourceId === entrySourceId).length;
   }
@@ -246,9 +260,15 @@ class MemoryEntryRepository implements EntryRepository {
       if (filters.from && entry.entryDate < filters.from) return false;
       if (filters.to && entry.entryDate > filters.to) return false;
       if (filters.categoryIds?.length && (!entry.categoryId || !filters.categoryIds.includes(entry.categoryId))) return false;
+      if (entry.categoryId && filters.excludedCategoryIds?.includes(entry.categoryId)) return false;
       if (filters.subjectUserIds?.length && (!entry.subjectUserId || !filters.subjectUserIds.includes(entry.subjectUserId))) return false;
+      if (filters.registeredByEmails?.length) {
+        const source = entry.entrySourceId ? this.entrySources.rows.get(entry.entrySourceId) : undefined;
+        if (!source?.createdBy || !filters.registeredByEmails.includes(source.createdBy)) return false;
+      }
       const tagIds = this.entryTags.get(entry.id) ?? [];
       if (filters.tagIds?.length && !filters.tagIds.some((id) => tagIds.includes(id))) return false;
+      if (filters.excludedTagIds?.some((id) => tagIds.includes(id))) return false;
       return !entry.archivedAt;
     });
     return Promise.all(rows.slice(0, filters.limit ?? rows.length).map((entry) => this.withDetails(entry)));
@@ -265,13 +285,23 @@ class MemoryEntryRepository implements EntryRepository {
     return this.withDetails(entry);
   }
 
-  async update(id: string, patch: Partial<Entry>, tagIds?: string[]): Promise<EntryWithDetails> {
-    const existing = this.rows.get(id);
-    if (!existing) throw new Error("entry not found");
-    const next = { ...existing, ...defined(patch) };
-    this.rows.set(id, next);
-    if (tagIds) this.entryTags.set(id, tagIds);
-    return this.withDetails(next);
+  async postSourceItem(entry: Entry, tagIds: string[], item: EntrySourceItem, expectedUpdatedAt: string): Promise<EntryWithDetails | null> {
+    const current = this.entrySourceItems.rows.get(item.id);
+    if (!current || current.status !== "pending" || current.updatedAt !== expectedUpdatedAt) return null;
+    if ([...this.rows.values()].some((row) => row.entrySourceItemId === item.id)) return null;
+    this.rows.set(entry.id, entry);
+    this.entryTags.set(entry.id, [...tagIds]);
+    this.entrySourceItems.rows.set(item.id, item);
+    await this.entrySources.refreshStatus(item.entrySourceId);
+    return this.withDetails(entry);
+  }
+
+  async update(entry: Entry, expectedRevision: string, tagIds?: string[]): Promise<EntryWithDetails | null> {
+    const existing = this.rows.get(entry.id);
+    if (!existing || existing.archivedAt || existing.revision !== expectedRevision) return null;
+    this.rows.set(entry.id, entry);
+    if (tagIds !== undefined) this.entryTags.set(entry.id, [...tagIds]);
+    return this.withDetails(entry);
   }
 
   async delete(id: string): Promise<void> {

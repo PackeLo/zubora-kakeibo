@@ -61,7 +61,7 @@ export async function actorFromSitesIdentity(identity: SitesIdentity, env: Env, 
 }
 
 export function sitesScopes(actor: Actor): string[] {
-  const scopes = ["kakeibo:read", "kakeibo:import", "kakeibo:assets:write"];
+  const scopes = ["kakeibo:read", "kakeibo:import", "kakeibo:drafts:write", "kakeibo:entries:post", "kakeibo:entries:write", "kakeibo:assets:write"];
   if (actor.role === "admin") scopes.push("kakeibo:taxonomy:write");
   return scopes;
 }

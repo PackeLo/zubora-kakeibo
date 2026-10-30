@@ -11,12 +11,17 @@ import {
   tagSchema, tagUpdateSchema, tagResultSchema, taxonomyResultSchema, deletionResultSchema,
   financialAssetSchema, financialAssetUpdateSchema, financialAssetResultSchema
 } from "../contracts/resources";
-import { entrySourceSchema, entrySourceResultSchema } from "../contracts/entrySources";
+import {
+  entrySourceSchema, entrySourceResultSchema, sourceItemFiltersSchema,
+  sourceItemPatchSchema, sourceItemResultSchema, sourceItemResult
+} from "../contracts/entrySources";
 import { summaryFiltersSchema, insightEntriesSchema } from "../contracts/insights";
+import { entryUpdateSchema, ledgerEntryResultSchema } from "../contracts/entries";
 
 const idSchema = z.object({ id: z.string().min(1) });
 const listSchema = z.object({ includeInactive: z.boolean().default(false) });
-const userResultSchema = z.object({ id: z.string(), displayName: z.string(), role: z.enum(["admin", "member"]) });
+const userResultSchema = z.object({ id: z.string(), email: z.string(), displayName: z.string(), role: z.enum(["admin", "member"]) });
+const profileResultSchema = z.object({ email: z.string(), displayName: z.string() });
 const cashflowFields = { incomeTotal: z.number(), expenseTotal: z.number(), netCashflow: z.number(), currency: z.string() };
 const monthResultSchema = z.object({ month: z.string(), ...cashflowFields });
 const categorySummarySchema = z.object({ categoryId: z.string().nullable(), categoryName: z.string(), amount: z.number(), entryCount: z.number(), currency: z.string() });
@@ -32,7 +37,7 @@ const entryResultSchema = z.object({
   amount: z.number(), currency: z.string()
 }).passthrough();
 
-export const serverInstructions = "家族の家計簿。分類前にgetTaxonomy、所有者を指定する前にlistUsersを呼ぶ。日付・金額が不明なら推測せず質問する。createEntrySourceは確認待ちの下書きを作る。確定は管理画面で行う。変更前に対象・変更内容を確認し、削除はIDと名前を提示して明示的な同意を得る。使用中のカテゴリ・タグと金融資産の削除は無効化になる。成功応答のIDと結果を確認して案内し、失敗した操作を成功扱いにしない。同じ取り込みの再送には同じidempotencyKeyを使う。";
+export const serverInstructions = "家族の家計簿。確定済み明細はgetInsightEntriesで探し、getEntryで最新値とrevisionを取得し、updateEntryにexpectedRevisionと変更項目だけを渡して編集する。確定済み編集に信頼度の制限はない。競合時は再取得して他の変更を確認し、上書きしない。元明細は取り込み・確定時の記録であり、現在の台帳はgetEntryで確認する。分類前にgetTaxonomy、対象者を指定する前にlistUsersを呼ぶ。日付・金額・対象者が不明なら推測せず質問する。createEntrySourceは確認待ちの下書きを作る。listEntrySourceItemsとgetEntrySourceItemで既存明細を取得し、updateEntrySourceItemで分類・タグ等を修正できる。tagsは登録済みタグ名の配列で、空配列は全解除、省略は維持。カテゴリはcategoryIdGuessに実際のIDを指定する。信頼度95%超で必要項目が揃う明細はpostEntrySourceItemで自動確定してよい。95%ちょうど以下・不明は管理画面の登録元明細で人間が確認して確定する。重複・必須不足などで確定が拒否されたら確認待ちに残し理由を伝える。信頼度を正答率の保証と説明しない。変更前に対象と内容を確認するが、95%超の確定で毎回ユーザーの承認を要求しない。削除はIDと名前を提示して明示的な同意を得る。使用中のカテゴリ・タグと金融資産の削除は無効化になる。成功応答のIDと結果を確認して案内し、下書きを確定済みと説明しない。同じ取り込みの再送には同じidempotencyKeyを使う。";
 
 export function createToolServer(useCases: KakeiboUseCases, actor: Actor, scopes: readonly string[], resource: string) {
   const server = new McpServer({ name: "zubora-kakeibo", version: "0.2.0" }, { instructions: serverInstructions });
@@ -40,6 +45,9 @@ export function createToolServer(useCases: KakeiboUseCases, actor: Actor, scopes
   const taxonomy: KakeiboScope = "kakeibo:taxonomy:write";
   const assets: KakeiboScope = "kakeibo:assets:write";
   const importing: KakeiboScope = "kakeibo:import";
+  const drafts: KakeiboScope = "kakeibo:drafts:write";
+  const posting: KakeiboScope = "kakeibo:entries:post";
+  const editing: KakeiboScope = "kakeibo:entries:write";
 
   function config(description: string, scope: KakeiboScope, destructive = false) {
     return {
@@ -77,14 +85,44 @@ export function createToolServer(useCases: KakeiboUseCases, actor: Actor, scopes
   }, ({ includeInactive }) => invoke(read, () => useCases.listTaxonomy(includeInactive)));
 
   server.registerTool("listUsers", {
-    ...config("金融資産の所有者・明細の対象者として指定できる家族のIDと名前を取得する。", read),
-    inputSchema: z.object({}), outputSchema: z.object({ items: z.array(userResultSchema) })
-  }, () => invoke(read, async () => ({ items: (await useCases.listUsers()).map(({ id, displayName, role }) => ({ id, displayName, role })) })));
+    ...config("家族のID・正式名・正規メールを取得する。対象者はID、登録者検索のregisteredByEmailsは正規メールを使う。profilesは表示名の設定で、未ログインの人の利用権限を表さない。", read),
+    inputSchema: z.object({}), outputSchema: z.object({ items: z.array(userResultSchema), profiles: z.array(profileResultSchema) })
+  }, () => invoke(read, async () => ({ items: await useCases.listUsers(), profiles: useCases.householdProfiles() })));
 
   server.registerTool("createEntrySource", {
     ...config("レシート等を確認待ちの下書きとして登録する。確定や集計反映は行わない。同じ再送には同じidempotencyKeyを指定する。", importing),
     inputSchema: entrySourceSchema.extend({ idempotencyKey: z.string().min(1).optional() }), outputSchema: entrySourceResultSchema
   }, ({ idempotencyKey, ...input }) => invoke(importing, () => useCases.createEntrySource(input, actor, idempotencyKey)));
+
+  server.registerTool("listEntrySourceItems", {
+    ...config("取り込み済みの明細を取得する。既定は確認待ち。status、期間、種別、entrySourceIdで絞り込める。確認待ちは集計に含まれない。", read),
+    inputSchema: sourceItemFiltersSchema, outputSchema: z.object({ items: z.array(sourceItemResultSchema) })
+  }, (filters) => invoke(read, async () => ({ items: (await useCases.listEntrySourceItems(filters)).map(sourceItemResult) })));
+
+  server.registerTool("getEntrySourceItem", {
+    ...config("IDを指定して取り込み明細の現在値・タグ・信頼度・確定ステータスを取得する。", read),
+    inputSchema: idSchema, outputSchema: sourceItemResultSchema
+  }, ({ id }) => invoke(read, async () => sourceItemResult(await useCases.getEntrySourceItem(id))));
+
+  server.registerTool("updateEntrySourceItem", {
+    ...config("確認待ち明細だけを部分編集する。tagsはタグ名の配列。省略は維持、nullや空配列は解除。categoryIdGuessはカテゴリID。確定や集計反映は行わず、信頼度は変更できない。", drafts),
+    inputSchema: sourceItemPatchSchema.extend({ id: z.string().min(1) }), outputSchema: sourceItemResultSchema
+  }, ({ id, ...patch }) => invoke(drafts, async () => sourceItemResult(await useCases.updateEntrySourceItem(id, patch))));
+
+  server.registerTool("postEntrySourceItem", {
+    ...config("保存済みの確認待ち明細を検証して確定し、集計へ反映する。信頼度95%超・必須項目と分類が有効・重複候補なしの場合だけ実行できる。成功した同じIDの再送は元の確定結果を返す。低信頼度は管理画面で確認する。", posting),
+    inputSchema: idSchema, outputSchema: entryResultSchema
+  }, ({ id }) => invoke(posting, () => useCases.postHighConfidenceSourceItem(id, actor)));
+
+  server.registerTool("getEntry", {
+    ...config("確定済みの家計簿明細をIDで取得する。現在値・分類・タグ・revisionを確認してから編集する。元明細の候補値は台帳の現在値とは異なる場合がある。", read),
+    inputSchema: idSchema, outputSchema: ledgerEntryResultSchema
+  }, ({ id }) => invoke(read, () => useCases.getEntry(id)));
+
+  server.registerTool("updateEntry", {
+    ...config("確定済み明細を同じIDのまま部分編集し集計に反映する。getEntryで得たrevisionをexpectedRevisionに指定する。省略は維持、tagIds空配列は全解除。競合時は再取得し、他の変更を勝手に上書きしない。信頼度95%の制限はない。", editing),
+    inputSchema: entryUpdateSchema.extend({ id: z.string().min(1) }), outputSchema: ledgerEntryResultSchema
+  }, ({ id, ...patch }) => invoke(editing, () => useCases.updateEntry(id, patch)));
 
   server.registerTool("getInsightOverview", {
     ...config("1461日以内の指定期間について、家計の概要を取得する。確認待ちの明細は含まない。", read),

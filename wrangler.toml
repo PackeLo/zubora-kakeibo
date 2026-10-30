@@ -7,7 +7,7 @@ workers_dev = true
 preview_urls = false
 
 [secrets]
-required = ["GPT_ACTION_TOKEN", "ADMIN_EMAILS", "HOUSEHOLD_EMAILS", "CF_ACCESS_TEAM_DOMAIN", "CF_ACCESS_AUD"]
+required = ["GPT_ACTION_TOKEN", "ADMIN_EMAILS", "HOUSEHOLD_EMAILS", "CF_ACCESS_TEAM_DOMAIN", "CF_ACCESS_AUD", "USER_DISPLAY_NAMES_JSON"]
 
 [observability]
 enabled = true

@@ -29,7 +29,7 @@ await build({
   outfile: path.join(temporary, "catalog.mjs")
 });
 const catalog = (await import(pathToFileURL(path.join(temporary, "catalog.mjs")).href + `?${Date.now()}`)).default;
-if (catalog.tools.length !== 17) throw new Error("Unexpected tool catalog");
+if (catalog.tools.length !== 23) throw new Error("Unexpected tool catalog");
 await writeFile(path.join(root, "app/connection/generated/tools.json"), JSON.stringify(catalog, null, 2) + "\n");
 const distribution = path.join(root, "app/connection/dist");
 await mkdir(path.join(distribution, "server"), { recursive: true });

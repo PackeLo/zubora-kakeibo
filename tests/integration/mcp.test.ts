@@ -15,13 +15,61 @@ async function data(client: Client, name: string, args: Record<string, unknown> 
 }
 
 describe("household MCP tools", () => {
+  it("retrieves, edits and confirms a high-confidence draft through MCP and returns the same posted result on retry", async () => {
+    const fixture = await oauthFixture();
+    const { tokens } = await fixture.login(supportedScopes);
+    const client = await fixture.connect(tokens.access_token);
+    try {
+      const category = await data(client, "createCategory", { code: "mcp-draft", name: "食費", kind: "expense" });
+      const tag = await data(client, "createTag", { name: "スーパー" });
+      const day = new Date().toISOString().slice(0, 10);
+      const imported = await data(client, "createEntrySource", { sourceType: "receipt", items: [{ entryType: "expense", entryDate: day, amount: 321, categoryNameGuess: "食費", confidence: 0.96 }] });
+      const id = (imported.createdEntrySourceItemIds as string[])[0];
+      expect(await data(client, "listEntrySourceItems", { entrySourceId: imported.entrySourceId })).toMatchObject({ items: [{ id, categoryIdGuess: category.id, status: "pending" }] });
+      expect(await data(client, "getEntrySourceItem", { id })).toMatchObject({ tags: [], confidence: 0.96 });
+      expect(await data(client, "updateEntrySourceItem", { id, tags: ["スーパー"], subjectUserId: "usr_access_admin@example.test" })).toMatchObject({ tags: ["スーパー"], amount: 321, status: "pending" });
+      expect(await data(client, "getInsightOverview", { from: day, to: day })).toMatchObject({ expenseTotal: 0 });
+      expect((await client.callTool({ name: "updateEntrySourceItem", arguments: { id, confidence: 1 } })).isError).toBe(true);
+      const posted = await data(client, "postEntrySourceItem", { id });
+      expect(await data(client, "postEntrySourceItem", { id })).toEqual(posted);
+      expect(await data(client, "getEntrySourceItem", { id })).toMatchObject({ status: "posted", postedEntryId: posted.id });
+      expect(await data(client, "listEntrySourceItems")).toEqual({ items: [] });
+      expect(await data(client, "getInsightOverview", { from: day, to: day })).toMatchObject({ expenseTotal: 321 });
+      expect(await data(client, "getCategoryInsights", { from: day, to: day, tagIds: [tag.id] })).toMatchObject({ items: [{ amount: 321 }] });
+      expect((await client.callTool({ name: "updateEntrySourceItem", arguments: { id, memo: "変更不可" } })).isError).toBe(true);
+      const ledger = await data(client, "getEntry", { id: posted.id });
+      expect(ledger).toMatchObject({ amount: 321, tags: [{ id: tag.id }], revision: posted.revision });
+      const edited = await data(client, "updateEntry", { id: posted.id, expectedRevision: ledger.revision, amount: 345, tagIds: [], target: "修正" });
+      expect(edited).toMatchObject({ id: posted.id, amount: 345, target: "修正", tags: [] });
+      expect(edited.revision).not.toBe(ledger.revision);
+      expect(await data(client, "getEntry", { id: posted.id })).toEqual(edited);
+      expect((await client.callTool({ name: "updateEntry", arguments: { id: posted.id, expectedRevision: ledger.revision, amount: 999 } })).isError).toBe(true);
+      expect(await data(client, "getInsightOverview", { from: day, to: day })).toMatchObject({ expenseTotal: 345 });
+      expect(await data(client, "getEntrySourceItem", { id })).toMatchObject({ amount: 321, status: "posted" });
+    } finally { await client.close(); }
+  });
+
+  it("does not grant draft editing or posting to a read/import-only connection", async () => {
+    const fixture = await oauthFixture();
+    const { tokens } = await fixture.login(["kakeibo:read", "kakeibo:import"]);
+    const client = await fixture.connect(tokens.access_token);
+    try {
+      const source = await data(client, "createEntrySource", { sourceType: "receipt", items: [{ entryType: "income", confidence: 1 }] });
+      const id = (source.createdEntrySourceItemIds as string[])[0];
+      await expect(client.callTool({ name: "updateEntrySourceItem", arguments: { id, memo: "拒否" } })).rejects.toThrow();
+      await expect(client.callTool({ name: "postEntrySourceItem", arguments: { id } })).rejects.toThrow();
+      await expect(client.callTool({ name: "updateEntry", arguments: { id: "unknown", expectedRevision: "unknown", amount: 100 } })).rejects.toThrow();
+      expect(await data(client, "getEntrySourceItem", { id })).toMatchObject({ memo: null, status: "pending" });
+    } finally { await client.close(); }
+  });
+
   it("manages categories, tags, and assets through the authenticated MCP client while preserving omitted fields", async () => {
     const fixture = await oauthFixture();
     const { tokens } = await fixture.login(supportedScopes);
     const client = await fixture.connect(tokens.access_token);
     try {
       const tools = (await client.listTools()).tools;
-      expect(tools).toHaveLength(17);
+      expect(tools).toHaveLength(23);
       expect(tools.find((tool) => tool.name === "deleteCategory")?.annotations?.destructiveHint).toBe(true);
       expect(tools.find((tool) => tool.name === "getTaxonomy")?.annotations?.readOnlyHint).toBe(true);
       const category = await data(client, "createCategory", { code: "food", name: "食費", kind: "expense", isActive: false, dedupeEnabled: false, sortOrder: 7 });

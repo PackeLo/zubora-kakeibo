@@ -4,6 +4,9 @@ import { archiveTargetYear, assertIsoDate, nowIso, yearOf, yearRange } from "../
 import { createDedupeKey, duplicatePairKey, textSimilarityScore } from "../domain/dedupe";
 import { newId } from "../domain/ids";
 import { assertNullableAmount, assertPositiveAmount } from "../domain/money";
+import { canAutomaticallyPost, editPendingSourceItem } from "../domain/entrySourceItem";
+import { editLedgerEntry } from "../domain/entry";
+import { entryProfile, publicUser, type DisplayNames } from "./householdProfiles";
 import type {
   Actor,
   ArchiveExport,
@@ -20,13 +23,14 @@ import type {
   SummaryFilters,
   Tag
 } from "../domain/types";
-import type { UnitOfWork } from "../ports/repositories";
+import type { SourceItemFilters, UnitOfWork } from "../ports/repositories";
 import { AppError, notFound, validationError } from "./errors";
 import type {
   EntrySourceInput,
   CategoryInput,
   ConfirmExternalBackupInput,
   EntryUpdateInput,
+  EntrySourceItemUpdateInput,
   FinancialAssetInput,
   ManualEntryInput,
   PostEntrySourceItemInput,
@@ -39,15 +43,19 @@ const SOURCE_GROUP_B: SourceType[] = ["credit_card_statement", "bank_statement"]
 export class KakeiboUseCases {
   constructor(
     private readonly repos: UnitOfWork,
-    private readonly config: { liveCompletedYearsToKeep: number }
+    private readonly config: { liveCompletedYearsToKeep: number; displayNames?: DisplayNames }
   ) {}
 
   async currentUser(actor: Actor) {
-    return this.repos.users.upsertAccessUser(actor);
+    return publicUser(await this.repos.users.upsertAccessUser(actor), this.config.displayNames ?? {});
   }
 
   async listUsers() {
-    return this.repos.users.listActive();
+    return (await this.repos.users.listActive()).map((user) => publicUser(user, this.config.displayNames ?? {}));
+  }
+
+  householdProfiles() {
+    return Object.entries(this.config.displayNames ?? {}).map(([email, displayName]) => ({ email, displayName }));
   }
 
   async listTaxonomy(includeInactive = false) {
@@ -190,7 +198,8 @@ export class KakeiboUseCases {
 
     const createdIds: string[] = [];
     for (const [index, item] of input.items.entries()) {
-      const category = item.categoryCodeGuess ? await this.repos.taxonomy.findCategoryByCode(item.categoryCodeGuess, item.entryType) : null;
+      const category = item.categoryCodeGuess ? await this.repos.taxonomy.findCategoryByCode(item.categoryCodeGuess, item.entryType)
+        : item.categoryNameGuess ? await this.resolveCategoryName(item.categoryNameGuess, item.entryType) : null;
       const created = await this.repos.entrySourceItems.create({
         id: newId("esi"),
         entrySourceId: source.id,
@@ -232,26 +241,70 @@ export class KakeiboUseCases {
     return this.repos.entrySources.update(id, { ...patch, updatedBy: actor.displayName, updatedAt: nowIso() });
   }
 
-  async listEntrySourceItems(filters: { status?: EntrySourceItem["status"]; type?: EntryType; from?: string; to?: string }) {
+  async listEntrySourceItems(filters: SourceItemFilters) {
     return this.repos.entrySourceItems.list(filters);
   }
 
-  async updateEntrySourceItem(id: string, patch: Partial<EntrySourceItem>) {
-    const existing = await this.repos.entrySourceItems.findById(id);
-    if (!existing) notFound("entry source item not found");
-    if (patch.entryDate != null) assertIsoDate(patch.entryDate, "entryDate");
-    if (patch.amount !== undefined) assertNullableAmount(patch.amount);
+  async getEntrySourceItem(id: string) {
+    const item = await this.repos.entrySourceItems.findById(id);
+    if (!item) notFound("entry source item not found");
+    return item;
+  }
+
+  async updateEntrySourceItem(id: string, input: EntrySourceItemUpdateInput) {
+    const existing = await this.getEntrySourceItem(id);
+    const { tags, ...patch } = input;
+    const next = editPendingSourceItem(existing, patch, nowIso());
+    if (!next) throw new AppError("CONFLICT", "確定済みの明細は下書きとして編集できないよ。");
     await this.assertDateWritable(existing.entryDate);
-    await this.assertDateWritable(patch.entryDate);
-    if (patch.categoryIdGuess) {
-      await this.assertCategoryCanBeUsed(patch.entryType ?? existing.entryType, patch.categoryIdGuess, true);
+    await this.assertDateWritable(next.entryDate);
+    if (input.categoryIdGuess === undefined && input.categoryNameGuess !== undefined) {
+      next.categoryIdGuess = input.categoryNameGuess ? (await this.resolveCategoryName(input.categoryNameGuess, next.entryType))?.id ?? null : null;
     }
-    const next = {
-      ...patch,
-      dedupeKey: createDedupeKey(patch.entryType ?? existing.entryType, patch.currency ?? existing.currency, patch.amount ?? existing.amount),
-      updatedAt: nowIso()
-    };
-    return this.repos.entrySourceItems.update(id, next);
+    await this.assertCategoryCanBeUsed(next.entryType, next.categoryIdGuess, true);
+    if (next.categoryIdGuess) next.categoryNameGuess = (await this.repos.taxonomy.findCategoryById(next.categoryIdGuess))!.name;
+    else if (input.categoryIdGuess === null && input.categoryNameGuess === undefined) next.categoryNameGuess = null;
+    if (input.subjectUserId != null && !(await this.repos.users.listActive()).some((user) => user.id === input.subjectUserId)) {
+      validationError("対象者は有効な家族から選んでね。");
+    }
+    if (tags !== undefined) {
+      const active = new Set((await this.repos.taxonomy.listTags()).map((tag) => tag.name));
+      let previous: string[] = [];
+      try { const names: unknown = JSON.parse(existing.tagsJson ?? "[]"); if (Array.isArray(names)) previous = names.filter((name): name is string => typeof name === "string"); } catch { /* Existing malformed tags can be replaced explicitly. */ }
+      const unknown = tags.filter((tag) => !active.has(tag) && !previous.includes(tag));
+      if (unknown.length) validationError(`未登録・無効なタグ: ${unknown.join("、")}。先にタグを登録してね。`);
+      next.tagsJson = JSON.stringify([...new Set(tags)]);
+    }
+    const updated = await this.repos.entrySourceItems.updatePending(next, existing.updatedAt);
+    if (!updated) throw new AppError("CONFLICT", "明細が変更されたよ。再取得してからやり直してね。");
+    return updated;
+  }
+
+  async postHighConfidenceSourceItem(id: string, actor: Actor) {
+    const item = await this.getEntrySourceItem(id);
+    if (item.status === "posted" && item.postedEntryId) {
+      const posted = await this.repos.entries.findById(item.postedEntryId);
+      if (posted) return posted;
+    }
+    if (!canAutomaticallyPost(item)) validationError("自動確定は信頼度95%超の確認待ち明細だけだよ。管理画面で内容を確認して確定してね。");
+    if (!item.entryDate || item.amount == null || !item.subjectUserId) validationError("日付・金額・対象者を確認してね。");
+    if (!(await this.repos.users.listActive()).some((user) => user.id === item.subjectUserId)) validationError("対象者は有効な家族から選んでね。");
+    let names: unknown;
+    try { names = JSON.parse(item.tagsJson ?? "[]"); } catch { validationError("推定タグの形式を確認してね。"); }
+    if (!Array.isArray(names) || !names.every((name): name is string => typeof name === "string")) validationError("推定タグの形式を確認してね。");
+    const active = await this.repos.taxonomy.listTags();
+    const tagIds = names.map((name) => {
+      const tag = active.find((candidate) => candidate.name === name);
+      if (!tag) validationError(`未登録・無効なタグ: ${name}。確認待ちに残したよ。`);
+      return tag.id;
+    });
+    if ((await this.duplicateCandidates(id)).length) throw new AppError("CONFLICT", "重複候補があるよ。管理画面で確認してね。");
+    await this.assertDateWritable(item.entryDate);
+    return this.createEntryFromSourceItem(item, {
+      entryType: item.entryType, entryDate: item.entryDate, amount: item.amount, currency: item.currency,
+      subjectUserId: item.subjectUserId, categoryId: item.categoryIdGuess ?? null, tagIds,
+      target: item.target ?? null, memo: item.memo ?? null
+    }, actor);
   }
 
   async postEntrySourceItem(id: string, input: PostEntrySourceItemInput, actor: Actor) {
@@ -327,35 +380,34 @@ export class KakeiboUseCases {
 
   async listEntries(filters: EntryFilters) {
     await this.assertNotPurged(filters.from, filters.to);
-    return this.repos.entries.list(filters);
+    return (await this.repos.entries.list(filters)).map((entry) => entryProfile(entry, this.config.displayNames ?? {}));
   }
 
   async updateEntry(id: string, input: EntryUpdateInput) {
-    const existing = await this.repos.entries.findById(id);
-    if (!existing) notFound("entry not found");
-    if (input.entryDate !== undefined) assertIsoDate(input.entryDate, "entryDate");
-    if (input.amount !== undefined) assertPositiveAmount(input.amount);
+    const existing = await this.getEntry(id);
+    const { expectedRevision, tagIds, ...patch } = input;
+    const next = editLedgerEntry(existing, patch, expectedRevision);
+    if (!next) throw new AppError("CONFLICT", "明細が更新されたよ。再取得して変更内容を確認してね。");
     await this.assertDateWritable(existing.entryDate);
-    if (input.entryDate !== undefined && input.entryDate !== existing.entryDate) {
-      await this.assertDateWritable(input.entryDate);
+    await this.assertDateWritable(next.entryDate);
+    await this.assertCategoryCanBeUsed(next.entryType, next.categoryId, next.categoryId !== existing.categoryId);
+    if (tagIds !== undefined) {
+      const previousIds = new Set(existing.tags.map((tag) => tag.id));
+      await this.assertTagsCanBeUsed(tagIds.filter((id) => !previousIds.has(id)));
     }
-    const nextEntryType = input.entryType ?? existing.entryType;
-    const nextCategoryId = input.categoryId === undefined ? existing.categoryId ?? null : input.categoryId ?? null;
-    if (nextEntryType === "expense" && !nextCategoryId) validationError("categoryId is required for expense");
-    await this.assertCategoryCanBeUsed(nextEntryType, nextCategoryId, input.categoryId !== undefined);
-    if (input.tagIds) await this.assertTagsCanBeUsed(input.tagIds);
-    const patch: Partial<Entry> = {
-      entryType: input.entryType,
-      entryDate: input.entryDate,
-      amount: input.amount,
-      currency: input.currency,
-      subjectUserId: input.subjectUserId,
-      categoryId: input.categoryId,
-      target: input.target,
-      memo: input.memo,
-      dedupeKey: createDedupeKey(input.entryType ?? existing.entryType, input.currency ?? existing.currency, input.amount ?? existing.amount)
-    };
-    return this.repos.entries.update(id, patch, input.tagIds);
+    if (input.subjectUserId !== undefined && input.subjectUserId !== existing.subjectUserId &&
+        !(await this.repos.users.listActive()).some((user) => user.id === input.subjectUserId)) validationError("対象者は有効な家族から選んでね。");
+    const updated = await this.repos.entries.update(next, expectedRevision, tagIds === undefined ? undefined : [...new Set(tagIds)]);
+    if (!updated) throw new AppError("CONFLICT", "明細が更新または削除されたよ。再取得して確認してね。");
+    return entryProfile(updated, this.config.displayNames ?? {});
+  }
+
+  async getEntry(id: string) {
+    const entry = await this.repos.entries.findById(id);
+    if (!entry) notFound("entry not found");
+    await this.assertNotPurged(entry.entryDate, entry.entryDate);
+    if (entry.archivedAt) throw new AppError("ARCHIVED_YEAR", "アーカイブ済みの明細は通常画面から編集できないよ。");
+    return entryProfile(entry, this.config.displayNames ?? {});
   }
 
   async deleteEntry(id: string) {
@@ -436,7 +488,8 @@ export class KakeiboUseCases {
   }
 
   async listFinancialAssets(includeInactive = false) {
-    return this.repos.financialAssets.list(includeInactive);
+    return (await this.repos.financialAssets.list(includeInactive)).sort((a, b) =>
+      a.assetType.localeCompare(b.assetType) || a.name.localeCompare(b.name, "ja") || a.id.localeCompare(b.id));
   }
 
   async createFinancialAsset(input: FinancialAssetInput, actor: Actor): Promise<FinancialAsset> {
@@ -699,12 +752,15 @@ export class KakeiboUseCases {
     assertPositiveAmount(input.amount);
     if (!input.subjectUserId) validationError("subjectUserId is required");
     if (input.entryType === "expense" && !input.categoryId) validationError("categoryId is required for expense");
+    if (!(input.currency ?? "JPY").trim()) validationError("通貨を入力してね。");
+    await this.assertDateWritable(item.entryDate);
     await this.assertDateWritable(input.entryDate);
     await this.assertCategoryCanBeUsed(input.entryType, input.categoryId ?? null, true);
     await this.assertTagsCanBeUsed(input.tagIds ?? []);
     const now = nowIso();
     const entry: Entry = {
       id: newId("ent"),
+      revision: crypto.randomUUID(),
       entryType: input.entryType,
       subjectUserId: input.subjectUserId,
       entryDate: input.entryDate,
@@ -720,8 +776,10 @@ export class KakeiboUseCases {
       archivedAt: null,
       archiveYearId: null
     };
-    const created = await this.repos.entries.create(entry, input.tagIds ?? []);
-    await this.repos.entrySourceItems.update(item.id, {
+    const category = input.categoryId ? await this.repos.taxonomy.findCategoryById(input.categoryId) : null;
+    const tags = await Promise.all([...new Set(input.tagIds ?? [])].map((id) => this.repos.taxonomy.findTagById(id)));
+    const updatedItem: EntrySourceItem = {
+      ...item,
       entryType: input.entryType,
       subjectUserId: input.subjectUserId,
       entryDate: input.entryDate,
@@ -729,14 +787,22 @@ export class KakeiboUseCases {
       currency: input.currency ?? "JPY",
       target: input.target ?? null,
       categoryIdGuess: input.categoryId ?? null,
+      categoryNameGuess: category?.name ?? null,
+      tagsJson: JSON.stringify(tags.map((tag) => tag!.name)),
       memo: input.memo ?? null,
       dedupeKey: entry.dedupeKey,
       status: "posted",
-      postedEntryId: created.id,
+      postedEntryId: entry.id,
       updatedAt: now
-    });
-    await this.repos.entrySources.refreshStatus(item.entrySourceId);
+    };
+    const created = await this.repos.entries.postSourceItem(entry, input.tagIds ?? [], updatedItem, item.updatedAt);
+    if (!created) throw new AppError("CONFLICT", "明細が変更または確定されたよ。再取得して確認してね。");
     return created;
+  }
+
+  private async resolveCategoryName(name: string, entryType: EntryType): Promise<Category | null> {
+    const matches = (await this.repos.taxonomy.listCategories()).filter((category) => category.kind === entryType && category.name === name);
+    return matches.length === 1 ? matches[0] : null;
   }
 
   private async assertArchiveExportMatchesCurrentData(year: number, archiveExport: ArchiveExport): Promise<void> {

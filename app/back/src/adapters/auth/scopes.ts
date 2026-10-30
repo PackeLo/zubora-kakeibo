@@ -4,6 +4,9 @@ import { AppError } from "../../application/errors";
 export const scopeDescriptions = {
   "kakeibo:read": "家計の分類・明細・集計・金融資産を読む",
   "kakeibo:import": "レシートなどを確認待ちの下書きとして登録する",
+  "kakeibo:drafts:write": "確認待ちの明細を編集する",
+  "kakeibo:entries:post": "信頼度95%超の確認待ち明細を検証して家計簿へ確定する",
+  "kakeibo:entries:write": "確定済みの家計簿明細を編集する",
   "kakeibo:taxonomy:write": "カテゴリ・タグを登録、編集、削除または無効化する（管理者のみ）",
   "kakeibo:assets:write": "家族の金融資産を登録、編集、無効化する",
   offline_access: "接続を更新して継続利用する"

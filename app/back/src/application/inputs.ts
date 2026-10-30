@@ -37,16 +37,30 @@ export interface PostEntrySourceItemInput {
   memo?: string | null;
 }
 
+export interface EntrySourceItemUpdateInput {
+  entryType?: EntryType;
+  subjectUserId?: string | null;
+  entryDate?: string | null;
+  amount?: number | null;
+  currency?: string;
+  target?: string | null;
+  categoryIdGuess?: string | null;
+  categoryNameGuess?: string | null;
+  tags?: string[];
+  memo?: string | null;
+}
+
 export interface ManualEntryInput extends PostEntrySourceItemInput {
   sourceDisplayName?: string | null;
 }
 
 export interface EntryUpdateInput {
+  expectedRevision: string;
   entryType?: EntryType;
   entryDate?: string;
   amount?: number;
   currency?: string;
-  subjectUserId?: string | null;
+  subjectUserId?: string;
   categoryId?: string | null;
   tagIds?: string[];
   target?: string | null;

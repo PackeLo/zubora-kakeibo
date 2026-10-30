@@ -106,6 +106,7 @@ export function entrySourceItemFromRow(row: Row): EntrySourceItem {
 export function entryFromRow(row: Row): Entry {
   return {
     id: String(row.id),
+    revision: String(row.revision),
     entryType: row.entry_type as Entry["entryType"],
     subjectUserId: row.subject_user_id as string | null,
     entryDate: String(row.entry_date),

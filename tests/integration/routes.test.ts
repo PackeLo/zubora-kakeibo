@@ -41,7 +41,7 @@ describe("routes", () => {
   });
 
   it("imports a receipt, saves corrections, posts tags, and includes only confirmed amounts in summaries", async () => {
-    const { app, env } = createTestApp();
+    const { app, env, repos } = createTestApp();
     const fixture = await accessFixture();
     const webEnv = { ...env, ...fixture.env };
     const headers = { ...await fixture.headers(), "Content-Type": "application/json" };
@@ -86,6 +86,17 @@ describe("routes", () => {
     expect(duplicatePost.status).toBe(409);
     const after = await app.request(summaryUrl, { headers: actionHeaders }, webEnv);
     expect(await after.json()).toMatchObject([{ categoryId: category.id, categoryName: "食費", amount: 1200, entryCount: 1 }]);
+    const all = await repos.entries.list({});
+    const ledger = all[0];
+    const detailUrl = `https://app.example.test/api/entries/${ledger.id}`;
+    expect(await (await app.request(detailUrl, { headers }, webEnv)).json()).toMatchObject({ revision: ledger.revision });
+    const edited = await app.request(detailUrl, { method: "PATCH", headers, body: JSON.stringify({ expectedRevision: ledger.revision, amount: 1500, tagIds: [] }) }, webEnv);
+    expect(edited.status).toBe(200);
+    expect(await edited.json()).toMatchObject({ id: ledger.id, amount: 1500, tags: [] });
+    const conflict = await app.request(detailUrl, { method: "PATCH", headers, body: JSON.stringify({ expectedRevision: ledger.revision, amount: 9999 }) }, webEnv);
+    expect(conflict.status).toBe(409);
+    expect(await (await app.request(summaryUrl, { headers: actionHeaders }, webEnv)).json()).toMatchObject([{ amount: 1500, entryCount: 1 }]);
+    expect(await repos.entries.list({})).toHaveLength(1);
   });
 
   it("requires web authentication for normal API on production hosts", async () => {

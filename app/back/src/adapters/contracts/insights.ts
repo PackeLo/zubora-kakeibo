@@ -8,7 +8,10 @@ const periodFields = {
   type: entryTypeSchema.optional(),
   categoryIds: z.array(z.string()).optional(),
   tagIds: z.array(z.string()).optional(),
-  subjectUserIds: z.array(z.string()).optional()
+  excludedCategoryIds: z.array(z.string().min(1)).optional().describe("除外するカテゴリID。含める条件と重なった明細も除外する。"),
+  excludedTagIds: z.array(z.string().min(1)).optional().describe("このタグIDのいずれかが付いた明細全体を除外する。タグなしは残す。"),
+  subjectUserIds: z.array(z.string()).optional(),
+  registeredByEmails: z.array(z.email()).optional()
 };
 function dateRange(maxDays: number) {
   return (value: { from: string; to: string }, ctx: z.RefinementCtx) => {

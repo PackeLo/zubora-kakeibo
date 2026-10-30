@@ -5,6 +5,7 @@ import { KakeiboUseCases, sanitizeEntryFilters } from "../../application/useCase
 import { AppError, validationError } from "../../application/errors";
 import { DomainValidationError } from "../../domain/errors";
 import { daysBetween } from "../../domain/dates";
+import { sourceItemFiltersSchema } from "../contracts/entrySources";
 import { requireActionToken, requireAdmin, webActor } from "../auth/auth";
 import { createUseCases } from "../../worker/bootstrap";
 import {
@@ -72,7 +73,7 @@ export function createApiApp(factory: (env: Env) => UnitOfWork) {
     return c.json(await useCases(c).currentUser(currentActor(c)));
   });
 
-  app.get("/api/users", async (c) => c.json({ items: await useCases(c).listUsers() }));
+  app.get("/api/users", async (c) => c.json({ items: await useCases(c).listUsers(), profiles: useCases(c).householdProfiles() }));
 
   app.get("/api/action/taxonomy", async (c) => {
     await requireActionToken(c);
@@ -146,14 +147,16 @@ export function createApiApp(factory: (env: Env) => UnitOfWork) {
 
   app.get("/api/entry-source-items", async (c) =>
     c.json({
-      items: await useCases(c).listEntrySourceItems({
-        status: c.req.query("status") as "pending" | "posted" | undefined,
-        type: c.req.query("type") as "expense" | "income" | undefined,
+      items: await useCases(c).listEntrySourceItems(sourceItemFiltersSchema.parse({
+        status: c.req.query("status"),
+        type: c.req.query("type"),
         from: c.req.query("from"),
-        to: c.req.query("to")
-      })
+        to: c.req.query("to"),
+        entrySourceId: c.req.query("entrySourceId")
+      }))
     })
   );
+  app.get("/api/entry-source-items/:id", async (c) => c.json(await useCases(c).getEntrySourceItem(c.req.param("id"))));
   app.get("/api/entry-source-items/:id/duplicate-candidates", async (c) => c.json({ items: await useCases(c).duplicateCandidates(c.req.param("id")) }));
   app.patch("/api/entry-source-items/:id", async (c) => c.json(await useCases(c).updateEntrySourceItem(c.req.param("id"), entrySourceItemUpdateSchema.parse(await c.req.json()))));
   app.post("/api/entry-source-items/:id/post", async (c) => c.json(await useCases(c).postEntrySourceItem(c.req.param("id"), postEntrySourceItemSchema.parse(await c.req.json()), currentActor(c))));
@@ -165,6 +168,7 @@ export function createApiApp(factory: (env: Env) => UnitOfWork) {
   });
 
   app.get("/api/entries", async (c) => c.json({ items: await useCases(c).listEntries(entryFilters(c.req.query())) }));
+  app.get("/api/entries/:id", async (c) => c.json(await useCases(c).getEntry(c.req.param("id"))));
   app.post("/api/entries", async (c) => c.json(await useCases(c).createManualEntry(manualEntrySchema.parse(await c.req.json()), currentActor(c)), 201));
   app.patch("/api/entries/:id", async (c) => c.json(await useCases(c).updateEntry(c.req.param("id"), entryUpdateSchema.parse(await c.req.json()))));
   app.delete("/api/entries/:id", async (c) => c.json(await useCases(c).deleteEntry(c.req.param("id"))));
@@ -243,7 +247,10 @@ function entryFilters(query: Record<string, string>) {
     to: query.to,
     categoryIds: parseCsv(query.categoryIds),
     tagIds: parseCsv(query.tagIds),
+    excludedCategoryIds: parseCsv(query.excludedCategoryIds),
+    excludedTagIds: parseCsv(query.excludedTagIds),
     subjectUserIds: parseCsv(query.subjectUserIds),
+    registeredByEmails: parseCsv(query.registeredByEmails),
     limit: parseNumber(query.limit)
   });
 }

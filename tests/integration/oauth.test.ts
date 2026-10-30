@@ -21,7 +21,7 @@ describe("MCP OAuth", () => {
     fixture.client.clientId = clientId;
     const { tokens } = await fixture.login();
     const client = await fixture.connect(tokens.access_token);
-    try { expect((await client.listTools()).tools).toHaveLength(17); }
+    try { expect((await client.listTools()).tools).toHaveLength(23); }
     finally { await client.close(); }
   });
 
@@ -79,7 +79,7 @@ describe("MCP OAuth", () => {
     expect(refresh.status).toBe(200);
     const renewed = await refresh.json() as { access_token: string; refresh_token: string };
     const client = await fixture.connect(renewed.access_token);
-    expect((await client.listTools()).tools).toHaveLength(17);
+    expect((await client.listTools()).tools).toHaveLength(23);
     await client.close();
     const wrongResource = await fixture.request("/oauth/token", { method: "POST", body: new URLSearchParams({ grant_type: "refresh_token", client_id: fixture.client.clientId, resource: "https://other.example.test/mcp", refresh_token: renewed.refresh_token }) });
     expect(wrongResource.status).toBe(400);

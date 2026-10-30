@@ -8,6 +8,7 @@ import type {
   EntryRepository,
   EntrySourceItemRepository,
   EntrySourceRepository,
+  SourceItemFilters,
   EntrySourceStatusResult,
   FinancialAssetRepository,
   MonthlySummary,
@@ -323,12 +324,16 @@ class D1EntrySourceRepository implements EntrySourceRepository {
 class D1EntrySourceItemRepository implements EntrySourceItemRepository {
   constructor(private readonly db: D1Database) {}
 
-  async list(filters: { status?: EntrySourceItem["status"]; type?: EntryType; from?: string; to?: string }): Promise<EntrySourceItem[]> {
+  async list(filters: SourceItemFilters): Promise<EntrySourceItem[]> {
     const params: unknown[] = [];
     const conditions: string[] = [];
     if (filters.status) {
       conditions.push("status = ?");
       params.push(filters.status);
+    }
+    if (filters.entrySourceId) {
+      conditions.push("entry_source_id = ?");
+      params.push(filters.entrySourceId);
     }
     if (filters.type) {
       conditions.push("entry_type = ?");
@@ -440,6 +445,17 @@ class D1EntrySourceItemRepository implements EntrySourceItemRepository {
     const row = await this.db.prepare("SELECT COUNT(*) AS count FROM entry_source_items WHERE entry_source_id = ?").bind(entrySourceId).first<{ count: number }>();
     return Number(row?.count ?? 0);
   }
+
+  async updatePending(item: EntrySourceItem, expectedUpdatedAt: string): Promise<EntrySourceItem | null> {
+    const row = await this.db.prepare(`UPDATE entry_source_items SET
+      entry_type = ?, subject_user_id = ?, entry_date = ?, amount = ?, currency = ?, target = ?,
+      category_id_guess = ?, category_name_guess = ?, tags_json = ?, memo = ?, dedupe_key = ?, updated_at = ?
+      WHERE id = ? AND status = 'pending' AND updated_at = ? RETURNING *`)
+      .bind(item.entryType, item.subjectUserId ?? null, item.entryDate ?? null, item.amount ?? null,
+        item.currency, item.target ?? null, item.categoryIdGuess ?? null, item.categoryNameGuess ?? null,
+        item.tagsJson ?? null, item.memo ?? null, item.dedupeKey ?? null, item.updatedAt, item.id, expectedUpdatedAt).first();
+    return row ? entrySourceItemFromRow(row) : null;
+  }
 }
 
 class D1EntryRepository implements EntryRepository {
@@ -451,34 +467,9 @@ class D1EntryRepository implements EntryRepository {
   ) {}
 
   async list(filters: EntryFilters): Promise<EntryWithDetails[]> {
-    const params: unknown[] = [];
-    const conditions = ["e.archived_at IS NULL"];
-    if (filters.type) {
-      conditions.push("e.entry_type = ?");
-      params.push(filters.type);
-    }
-    if (filters.from) {
-      conditions.push("e.entry_date >= ?");
-      params.push(filters.from);
-    }
-    if (filters.to) {
-      conditions.push("e.entry_date <= ?");
-      params.push(filters.to);
-    }
-    if (filters.categoryIds?.length) {
-      conditions.push(`e.category_id IN (${filters.categoryIds.map(() => "?").join(",")})`);
-      params.push(...filters.categoryIds);
-    }
-    if (filters.subjectUserIds?.length) {
-      conditions.push(`e.subject_user_id IN (${filters.subjectUserIds.map(() => "?").join(",")})`);
-      params.push(...filters.subjectUserIds);
-    }
-    if (filters.tagIds?.length) {
-      conditions.push(`EXISTS (SELECT 1 FROM entry_tags etf WHERE etf.entry_id = e.id AND etf.tag_id IN (${filters.tagIds.map(() => "?").join(",")}))`);
-      params.push(...filters.tagIds);
-    }
+    const { where, params } = buildEntryWhere(filters);
     const limit = filters.limit ? ` LIMIT ${Math.min(filters.limit, 10000)}` : "";
-    const { results } = await this.db.prepare(`SELECT e.* FROM entries e WHERE ${conditions.join(" AND ")} ORDER BY e.entry_date DESC, e.fixed_at DESC${limit}`).bind(...params).all();
+    const { results } = await this.db.prepare(`SELECT e.* FROM entries e ${where} ORDER BY e.entry_date DESC, e.fixed_at DESC${limit}`).bind(...params).all();
     return Promise.all((results ?? []).map((row) => this.withDetails(entryFromRow(row))));
   }
 
@@ -491,8 +482,8 @@ class D1EntryRepository implements EntryRepository {
     await this.db
       .prepare(
         `INSERT INTO entries
-        (id, entry_type, subject_user_id, entry_date, amount, currency, category_id, target, memo, entry_source_id, entry_source_item_id, dedupe_key, fixed_at, archived_at, archive_year_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        (id, entry_type, subject_user_id, entry_date, amount, currency, category_id, target, memo, entry_source_id, entry_source_item_id, dedupe_key, fixed_at, archived_at, archive_year_id, revision)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         entry.id,
@@ -509,7 +500,8 @@ class D1EntryRepository implements EntryRepository {
         entry.dedupeKey,
         entry.fixedAt,
         entry.archivedAt,
-        entry.archiveYearId
+        entry.archiveYearId,
+        entry.revision
       )
       .run();
     await this.db.prepare(entry.entryType === "expense" ? "INSERT INTO expense_entries (entry_id) VALUES (?)" : "INSERT INTO income_entries (entry_id) VALUES (?)").bind(entry.id).run();
@@ -519,41 +511,55 @@ class D1EntryRepository implements EntryRepository {
     return created;
   }
 
-  async update(id: string, patch: Partial<Entry>, tagIds?: string[]): Promise<EntryWithDetails> {
-    const before = await this.findById(id);
-    if (!before) throw new Error("entry not found");
-    const { sql, values } = setClause(
-      {
-        entryType: patch.entryType,
-        subjectUserId: patch.subjectUserId,
-        entryDate: patch.entryDate,
-        amount: patch.amount,
-        currency: patch.currency,
-        categoryId: patch.categoryId,
-        target: patch.target,
-        memo: patch.memo,
-        dedupeKey: patch.dedupeKey,
-        fixedAt: patch.fixedAt
-      },
-      {
-        entryType: "entry_type",
-        subjectUserId: "subject_user_id",
-        entryDate: "entry_date",
-        categoryId: "category_id",
-        dedupeKey: "dedupe_key",
-        fixedAt: "fixed_at"
-      }
-    );
-    if (sql) await this.db.prepare(`UPDATE entries SET ${sql} WHERE id = ?`).bind(...values, id).run();
-    if (patch.entryType && patch.entryType !== before.entryType) {
-      await this.db.prepare("DELETE FROM expense_entries WHERE entry_id = ?").bind(id).run();
-      await this.db.prepare("DELETE FROM income_entries WHERE entry_id = ?").bind(id).run();
-      await this.db.prepare(patch.entryType === "expense" ? "INSERT INTO expense_entries (entry_id) VALUES (?)" : "INSERT INTO income_entries (entry_id) VALUES (?)").bind(id).run();
+  async postSourceItem(entry: Entry, tagIds: string[], item: EntrySourceItem, expectedUpdatedAt: string): Promise<EntryWithDetails | null> {
+    const statements = [this.db.prepare(`INSERT INTO entries
+      (id, entry_type, subject_user_id, entry_date, amount, currency, category_id, target, memo,
+       entry_source_id, entry_source_item_id, dedupe_key, fixed_at, archived_at, archive_year_id, revision)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM entry_source_items
+      WHERE id = ? AND status = 'pending' AND updated_at = ?`)
+      .bind(entry.id, entry.entryType, entry.subjectUserId ?? null, entry.entryDate, entry.amount, entry.currency,
+        entry.categoryId ?? null, entry.target ?? null, entry.memo ?? null, entry.entrySourceId ?? null,
+        entry.entrySourceItemId ?? null, entry.dedupeKey ?? null, entry.fixedAt, null, null, entry.revision, item.id, expectedUpdatedAt),
+    this.db.prepare(`INSERT INTO ${entry.entryType === "expense" ? "expense_entries" : "income_entries"} (entry_id)
+      SELECT id FROM entries WHERE id = ?`).bind(entry.id),
+    ...[...new Set(tagIds)].map((tagId) => this.db.prepare(`INSERT INTO entry_tags (entry_id, tag_id)
+      SELECT id, ? FROM entries WHERE id = ?`).bind(tagId, entry.id)),
+    this.db.prepare(`UPDATE entry_source_items SET entry_type = ?, subject_user_id = ?, entry_date = ?,
+      amount = ?, currency = ?, target = ?, category_id_guess = ?, category_name_guess = ?, tags_json = ?,
+      memo = ?, dedupe_key = ?, status = 'posted', posted_entry_id = ?, updated_at = ?
+      WHERE id = ? AND EXISTS (SELECT 1 FROM entries WHERE id = ?)`)
+      .bind(item.entryType, item.subjectUserId ?? null, item.entryDate ?? null, item.amount ?? null, item.currency,
+        item.target ?? null, item.categoryIdGuess ?? null, item.categoryNameGuess ?? null, item.tagsJson ?? null,
+        item.memo ?? null, item.dedupeKey ?? null, entry.id, item.updatedAt, item.id, entry.id),
+    this.db.prepare(`UPDATE entry_sources SET status = CASE
+      WHEN NOT EXISTS (SELECT 1 FROM entry_source_items WHERE entry_source_id = ? AND status = 'pending') THEN 'posted'
+      WHEN EXISTS (SELECT 1 FROM entry_source_items WHERE entry_source_id = ? AND status = 'posted') THEN 'partially_posted'
+      ELSE 'pending' END, updated_at = ? WHERE id = ?`)
+      .bind(item.entrySourceId, item.entrySourceId, item.updatedAt, item.entrySourceId)];
+    await this.db.batch(statements);
+    return this.findById(entry.id);
+  }
+
+  async update(entry: Entry, expectedRevision: string, tagIds?: string[]): Promise<EntryWithDetails | null> {
+    const guard = "EXISTS (SELECT 1 FROM entries WHERE id = ? AND revision = ?)";
+    const statements = [this.db.prepare(`UPDATE entries SET entry_type = ?, subject_user_id = ?,
+      entry_date = ?, amount = ?, currency = ?, category_id = ?, target = ?, memo = ?, dedupe_key = ?, revision = ?
+      WHERE id = ? AND revision = ? AND archived_at IS NULL`)
+      .bind(entry.entryType, entry.subjectUserId ?? null, entry.entryDate, entry.amount, entry.currency,
+        entry.categoryId ?? null, entry.target ?? null, entry.memo ?? null, entry.dedupeKey ?? null,
+        entry.revision, entry.id, expectedRevision),
+    this.db.prepare(`DELETE FROM expense_entries WHERE entry_id = ? AND ${guard}`).bind(entry.id, entry.id, entry.revision),
+    this.db.prepare(`DELETE FROM income_entries WHERE entry_id = ? AND ${guard}`).bind(entry.id, entry.id, entry.revision),
+    this.db.prepare(`INSERT INTO ${entry.entryType === "expense" ? "expense_entries" : "income_entries"} (entry_id)
+      SELECT id FROM entries WHERE id = ? AND revision = ?`).bind(entry.id, entry.revision)];
+    if (tagIds !== undefined) {
+      statements.push(this.db.prepare(`DELETE FROM entry_tags WHERE entry_id = ? AND ${guard}`).bind(entry.id, entry.id, entry.revision));
+      for (const tagId of new Set(tagIds)) statements.push(this.db.prepare(`INSERT INTO entry_tags (entry_id, tag_id)
+        SELECT id, ? FROM entries WHERE id = ? AND revision = ?`).bind(tagId, entry.id, entry.revision));
     }
-    if (tagIds) await this.replaceTags(id, tagIds);
-    const updated = await this.findById(id);
-    if (!updated) throw new Error("entry not found after update");
-    return updated;
+    const results = await this.db.batch(statements);
+    if (results[0].meta.changes !== 1) return null;
+    return this.findById(entry.id);
   }
 
   async delete(id: string): Promise<void> {
@@ -1063,11 +1069,23 @@ function buildEntryWhere(filters: SummaryFilters): { where: string; params: unkn
   }
   const categoryClause = inClause(filters.categoryIds, "e.category_id", params);
   if (categoryClause) conditions.push(categoryClause.replace(/^ AND /, ""));
+  if (filters.excludedCategoryIds?.length) {
+    conditions.push(`(e.category_id IS NULL OR e.category_id NOT IN (${filters.excludedCategoryIds.map(() => "?").join(",")}))`);
+    params.push(...filters.excludedCategoryIds);
+  }
   const subjectClause = inClause(filters.subjectUserIds, "e.subject_user_id", params);
   if (subjectClause) conditions.push(subjectClause.replace(/^ AND /, ""));
+  if (filters.registeredByEmails?.length) {
+    conditions.push(`EXISTS (SELECT 1 FROM entry_sources s WHERE s.id = e.entry_source_id AND s.created_by IN (${filters.registeredByEmails.map(() => "?").join(",")}))`);
+    params.push(...filters.registeredByEmails);
+  }
   if (filters.tagIds?.length) {
     conditions.push(`EXISTS (SELECT 1 FROM entry_tags etf WHERE etf.entry_id = e.id AND etf.tag_id IN (${filters.tagIds.map(() => "?").join(",")}))`);
     params.push(...filters.tagIds);
+  }
+  if (filters.excludedTagIds?.length) {
+    conditions.push(`NOT EXISTS (SELECT 1 FROM entry_tags etx WHERE etx.entry_id = e.id AND etx.tag_id IN (${filters.excludedTagIds.map(() => "?").join(",")}))`);
+    params.push(...filters.excludedTagIds);
   }
   return { where: `WHERE ${conditions.join(" AND ")}`, params };
 }

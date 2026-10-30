@@ -1,0 +1,1 @@
+ALTER TABLE entries ADD COLUMN revision TEXT NOT NULL DEFAULT 'initial';
