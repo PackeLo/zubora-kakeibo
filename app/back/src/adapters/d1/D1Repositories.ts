@@ -1,4 +1,4 @@
-import type { Actor, Category, Entry, EntryFilters, EntrySource, EntrySourceItem, EntryType, FinancialAsset, SummaryFilters, Tag, User } from "../../domain/types";
+import type { Actor, Category, Entry, EntryFilters, EntrySource, EntrySourceItem, EntryType, FinancialAsset, Receipt, ReceiptFilters, ReceiptPage, ReceiptTotal, ReceiptView, SummaryFilters, Tag, User } from "../../domain/types";
 import type {
   HouseholdOverview,
   ArchiveRepository,
@@ -12,6 +12,7 @@ import type {
   EntrySourceStatusResult,
   FinancialAssetRepository,
   MonthlySummary,
+  ReceiptRepository,
   SummaryRepository,
   TaxonomyRepository,
   UnitOfWork,
@@ -29,6 +30,7 @@ import {
   entrySourceItemFromRow,
   financialAssetFromRow,
   intBool,
+  receiptFromRow,
   tagFromRow,
   userFromRow
 } from "./mappers";
@@ -41,6 +43,7 @@ export class D1UnitOfWork implements UnitOfWork {
   entrySources: EntrySourceRepository;
   entrySourceItems: EntrySourceItemRepository;
   entries: EntryRepository;
+  receipts: ReceiptRepository;
   financialAssets: FinancialAssetRepository;
   duplicates: DuplicateRepository;
   summaries: SummaryRepository;
@@ -52,6 +55,7 @@ export class D1UnitOfWork implements UnitOfWork {
     this.entrySources = new D1EntrySourceRepository(db);
     this.entrySourceItems = new D1EntrySourceItemRepository(db);
     this.entries = new D1EntryRepository(db, this.taxonomy, this.entrySources, this.entrySourceItems);
+    this.receipts = new D1ReceiptRepository(db, this.entries);
     this.financialAssets = new D1FinancialAssetRepository(db);
     this.duplicates = new D1DuplicateRepository(db);
     this.summaries = new D1SummaryRepository(db);
@@ -482,8 +486,8 @@ class D1EntryRepository implements EntryRepository {
     await this.db
       .prepare(
         `INSERT INTO entries
-        (id, entry_type, subject_user_id, entry_date, amount, currency, category_id, target, memo, entry_source_id, entry_source_item_id, dedupe_key, fixed_at, archived_at, archive_year_id, revision)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        (id, entry_type, subject_user_id, entry_date, amount, currency, category_id, target, memo, entry_source_id, entry_source_item_id, receipt_id, dedupe_key, fixed_at, archived_at, archive_year_id, revision)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         entry.id,
@@ -497,6 +501,7 @@ class D1EntryRepository implements EntryRepository {
         entry.memo,
         entry.entrySourceId,
         entry.entrySourceItemId,
+        entry.receiptId,
         entry.dedupeKey,
         entry.fixedAt,
         entry.archivedAt,
@@ -514,12 +519,12 @@ class D1EntryRepository implements EntryRepository {
   async postSourceItem(entry: Entry, tagIds: string[], item: EntrySourceItem, expectedUpdatedAt: string): Promise<EntryWithDetails | null> {
     const statements = [this.db.prepare(`INSERT INTO entries
       (id, entry_type, subject_user_id, entry_date, amount, currency, category_id, target, memo,
-       entry_source_id, entry_source_item_id, dedupe_key, fixed_at, archived_at, archive_year_id, revision)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM entry_source_items
+       entry_source_id, entry_source_item_id, receipt_id, dedupe_key, fixed_at, archived_at, archive_year_id, revision)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM entry_source_items
       WHERE id = ? AND status = 'pending' AND updated_at = ?`)
       .bind(entry.id, entry.entryType, entry.subjectUserId ?? null, entry.entryDate, entry.amount, entry.currency,
         entry.categoryId ?? null, entry.target ?? null, entry.memo ?? null, entry.entrySourceId ?? null,
-        entry.entrySourceItemId ?? null, entry.dedupeKey ?? null, entry.fixedAt, null, null, entry.revision, item.id, expectedUpdatedAt),
+        entry.entrySourceItemId ?? null, entry.receiptId, entry.dedupeKey ?? null, entry.fixedAt, null, null, entry.revision, item.id, expectedUpdatedAt),
     this.db.prepare(`INSERT INTO ${entry.entryType === "expense" ? "expense_entries" : "income_entries"} (entry_id)
       SELECT id FROM entries WHERE id = ?`).bind(entry.id),
     ...[...new Set(tagIds)].map((tagId) => this.db.prepare(`INSERT INTO entry_tags (entry_id, tag_id)
@@ -544,10 +549,10 @@ class D1EntryRepository implements EntryRepository {
     const guard = "EXISTS (SELECT 1 FROM entries WHERE id = ? AND revision = ?)";
     const statements = [this.db.prepare(`UPDATE entries SET entry_type = ?, subject_user_id = ?,
       entry_date = ?, amount = ?, currency = ?, category_id = ?, target = ?, memo = ?, dedupe_key = ?, revision = ?
-      WHERE id = ? AND revision = ? AND archived_at IS NULL`)
+      WHERE id = ? AND revision = ? AND archived_at IS NULL AND (receipt_id IS NULL OR ? = 'expense')`)
       .bind(entry.entryType, entry.subjectUserId ?? null, entry.entryDate, entry.amount, entry.currency,
         entry.categoryId ?? null, entry.target ?? null, entry.memo ?? null, entry.dedupeKey ?? null,
-        entry.revision, entry.id, expectedRevision),
+        entry.revision, entry.id, expectedRevision, entry.entryType),
     this.db.prepare(`DELETE FROM expense_entries WHERE entry_id = ? AND ${guard}`).bind(entry.id, entry.id, entry.revision),
     this.db.prepare(`DELETE FROM income_entries WHERE entry_id = ? AND ${guard}`).bind(entry.id, entry.id, entry.revision),
     this.db.prepare(`INSERT INTO ${entry.entryType === "expense" ? "expense_entries" : "income_entries"} (entry_id)
@@ -613,6 +618,174 @@ class D1EntryRepository implements EntryRepository {
     const source = entry.entrySourceId ? await this.entrySources.findById(entry.entrySourceId) : null;
     const sourceItem = entry.entrySourceItemId ? await this.entrySourceItems.findById(entry.entrySourceItemId) : null;
     return { ...entry, category, tags, source, sourceItem };
+  }
+}
+
+class D1ReceiptRepository implements ReceiptRepository {
+  constructor(
+    private readonly db: D1Database,
+    private readonly entries: EntryRepository
+  ) {}
+
+  async list(filters: ReceiptFilters): Promise<ReceiptPage> {
+    const { existsSql, params } = buildReceiptEntryExists(filters);
+    const countRow = await this.db
+      .prepare(`SELECT COUNT(*) AS count FROM receipts r WHERE ${existsSql}`)
+      .bind(...params)
+      .first<{ count: number }>();
+    const totalItems = Number(countRow?.count ?? 0);
+    const offset = (filters.page - 1) * filters.pageSize;
+    const { results: receiptRows } = await this.db
+      .prepare(
+        `SELECT r.*
+        FROM receipts r
+        WHERE ${existsSql}
+        ORDER BY (
+          SELECT MAX(e.entry_date)
+          FROM entries e
+          WHERE e.receipt_id = r.id AND e.archived_at IS NULL
+        ) DESC, r.updated_at DESC
+        LIMIT ? OFFSET ?`
+      )
+      .bind(...params, filters.pageSize, offset)
+      .all();
+    const receipts = (receiptRows ?? []).map(receiptFromRow);
+    const pageEntries = receipts.length === 0
+      ? []
+      : await this.entries.list({ receiptIds: receipts.map((receipt) => receipt.id) });
+    const entriesByReceipt = new Map<string, EntryWithDetails[]>();
+    for (const entry of pageEntries) {
+      if (!entry.receiptId) continue;
+      const rows = entriesByReceipt.get(entry.receiptId) ?? [];
+      rows.push(entry);
+      entriesByReceipt.set(entry.receiptId, rows);
+    }
+    const items = receipts.map((receipt) => receiptView(receipt, entriesByReceipt.get(receipt.id) ?? []));
+    const { results: totalRows } = await this.db
+      .prepare(
+        `WITH matched_receipts AS (
+          SELECT r.id FROM receipts r WHERE ${existsSql}
+        )
+        SELECT e.currency, SUM(e.amount) AS amount
+        FROM entries e
+        INNER JOIN matched_receipts mr ON mr.id = e.receipt_id
+        WHERE e.archived_at IS NULL AND e.entry_type = 'expense'
+        GROUP BY e.currency
+        ORDER BY e.currency`
+      )
+      .bind(...params)
+      .all();
+    return {
+      items,
+      page: filters.page,
+      pageSize: filters.pageSize,
+      totalItems,
+      totalPages: totalItems === 0 ? 0 : Math.ceil(totalItems / filters.pageSize),
+      filteredReceiptTotals: (totalRows ?? []).map((row) => ({
+        currency: String(row.currency),
+        amount: Number(row.amount ?? 0)
+      }))
+    };
+  }
+
+  async findById(id: string): Promise<Receipt | null> {
+    const row = await this.db.prepare("SELECT * FROM receipts WHERE id = ?").bind(id).first();
+    return row ? receiptFromRow(row) : null;
+  }
+
+  async findByEntrySourceId(entrySourceId: string): Promise<Receipt | null> {
+    const row = await this.db.prepare("SELECT * FROM receipts WHERE entry_source_id = ?").bind(entrySourceId).first();
+    return row ? receiptFromRow(row) : null;
+  }
+
+  async ensureForEntrySource(receipt: Receipt): Promise<Receipt> {
+    const existing = receipt.entrySourceId ? await this.findByEntrySourceId(receipt.entrySourceId) : null;
+    if (existing) return existing;
+    await this.db
+      .prepare(
+        `INSERT OR IGNORE INTO receipts
+        (id, entry_source_id, display_name, created_by, created_at, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(receipt.id, receipt.entrySourceId, receipt.displayName, receipt.createdBy, receipt.createdAt, receipt.updatedBy, receipt.updatedAt)
+      .run();
+    const created = receipt.entrySourceId ? await this.findByEntrySourceId(receipt.entrySourceId) : await this.findById(receipt.id);
+    if (!created) throw new Error("receipt not found after ensure");
+    return created;
+  }
+
+  async create(receipt: Receipt, entryIds: string[]): Promise<Receipt | null> {
+    if (entryIds.length < 2 || new Set(entryIds).size !== entryIds.length) return null;
+    const statements = [
+      this.db.prepare(
+        `INSERT INTO receipts
+        (id, entry_source_id, display_name, created_by, created_at, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).bind(receipt.id, receipt.entrySourceId, receipt.displayName, receipt.createdBy, receipt.createdAt, receipt.updatedBy, receipt.updatedAt),
+      ...entryIds.map((entryId) => this.db
+        .prepare("UPDATE entries SET receipt_id = ? WHERE id = ? AND entry_type = 'expense' AND receipt_id IS NULL AND archived_at IS NULL")
+        .bind(receipt.id, entryId)),
+      this.db
+        .prepare(
+          `UPDATE entries SET receipt_id = NULL
+          WHERE receipt_id = ?
+            AND (SELECT COUNT(*) FROM entries WHERE receipt_id = ?) <> ?`
+        )
+        .bind(receipt.id, receipt.id, entryIds.length),
+      this.db
+        .prepare(
+          `DELETE FROM receipts
+          WHERE id = ?
+            AND (SELECT COUNT(*) FROM entries WHERE receipt_id = ?) <> ?`
+        )
+        .bind(receipt.id, receipt.id, entryIds.length)
+    ];
+    await this.db.batch(statements);
+    return this.findById(receipt.id);
+  }
+
+  async update(id: string, patch: Partial<Receipt>): Promise<Receipt> {
+    const { sql, values } = setClause(
+      {
+        displayName: patch.displayName,
+        updatedBy: patch.updatedBy,
+        updatedAt: patch.updatedAt
+      },
+      { displayName: "display_name", updatedBy: "updated_by", updatedAt: "updated_at" }
+    );
+    if (sql) await this.db.prepare(`UPDATE receipts SET ${sql} WHERE id = ?`).bind(...values, id).run();
+    const updated = await this.findById(id);
+    if (!updated) throw new Error("receipt not found");
+    return updated;
+  }
+
+  async delete(id: string): Promise<void> {
+    await this.db.batch([
+      this.db.prepare("UPDATE entries SET receipt_id = NULL WHERE receipt_id = ?").bind(id),
+      this.db.prepare("DELETE FROM receipts WHERE id = ?").bind(id)
+    ]);
+  }
+
+  async deleteIfEmpty(id: string): Promise<void> {
+    await this.db
+      .prepare("DELETE FROM receipts WHERE id = ? AND NOT EXISTS (SELECT 1 FROM entries WHERE receipt_id = ?)")
+      .bind(id, id)
+      .run();
+  }
+
+  async deleteIfEmptyByEntrySourceId(entrySourceId: string): Promise<void> {
+    await this.db
+      .prepare(
+        `DELETE FROM receipts
+        WHERE entry_source_id = ?
+          AND NOT EXISTS (SELECT 1 FROM entries WHERE receipt_id = receipts.id)`
+      )
+      .bind(entrySourceId)
+      .run();
+  }
+
+  async deleteAllEmpty(): Promise<void> {
+    await this.db.prepare("DELETE FROM receipts WHERE NOT EXISTS (SELECT 1 FROM entries WHERE receipt_id = receipts.id)").run();
   }
 }
 
@@ -936,6 +1109,7 @@ class D1ArchiveRepository implements ArchiveRepository {
     const { sql, values } = setClause(
       {
         status: patch.status,
+        archiveFormatVersion: patch.archiveFormatVersion,
         entryCount: patch.entryCount,
         expenseCount: patch.expenseCount,
         incomeCount: patch.incomeCount,
@@ -954,6 +1128,7 @@ class D1ArchiveRepository implements ArchiveRepository {
         updatedAt: patch.updatedAt
       },
       {
+        archiveFormatVersion: "archive_format_version",
         entryCount: "entry_count",
         expenseCount: "expense_count",
         incomeCount: "income_count",
@@ -1075,6 +1250,8 @@ function buildEntryWhere(filters: SummaryFilters): { where: string; params: unkn
   }
   const subjectClause = inClause(filters.subjectUserIds, "e.subject_user_id", params);
   if (subjectClause) conditions.push(subjectClause.replace(/^ AND /, ""));
+  const receiptClause = inClause(filters.receiptIds, "e.receipt_id", params);
+  if (receiptClause) conditions.push(receiptClause.replace(/^ AND /, ""));
   if (filters.registeredByEmails?.length) {
     conditions.push(`EXISTS (SELECT 1 FROM entry_sources s WHERE s.id = e.entry_source_id AND s.created_by IN (${filters.registeredByEmails.map(() => "?").join(",")}))`);
     params.push(...filters.registeredByEmails);
@@ -1088,4 +1265,52 @@ function buildEntryWhere(filters: SummaryFilters): { where: string; params: unkn
     params.push(...filters.excludedTagIds);
   }
   return { where: `WHERE ${conditions.join(" AND ")}`, params };
+}
+
+function buildReceiptEntryExists(filters: ReceiptFilters): { existsSql: string; params: unknown[] } {
+  const params: unknown[] = [];
+  const conditions = ["e.receipt_id = r.id", "e.archived_at IS NULL", "e.entry_type = 'expense'"];
+  if (filters.from) {
+    conditions.push("e.entry_date >= ?");
+    params.push(filters.from);
+  }
+  if (filters.to) {
+    conditions.push("e.entry_date <= ?");
+    params.push(filters.to);
+  }
+  if (filters.categoryIds?.length) {
+    conditions.push(`e.category_id IN (${filters.categoryIds.map(() => "?").join(",")})`);
+    params.push(...filters.categoryIds);
+  }
+  if (filters.subjectUserIds?.length) {
+    conditions.push(`e.subject_user_id IN (${filters.subjectUserIds.map(() => "?").join(",")})`);
+    params.push(...filters.subjectUserIds);
+  }
+  if (filters.tagIds?.length) {
+    conditions.push(`EXISTS (
+      SELECT 1 FROM entry_tags et
+      WHERE et.entry_id = e.id AND et.tag_id IN (${filters.tagIds.map(() => "?").join(",")})
+    )`);
+    params.push(...filters.tagIds);
+  }
+  return { existsSql: `EXISTS (SELECT 1 FROM entries e WHERE ${conditions.join(" AND ")})`, params };
+}
+
+function receiptView(receipt: Receipt, entries: EntryWithDetails[]): ReceiptView {
+  const dates = entries.map((entry) => entry.entryDate).sort();
+  const totalsByCurrency = new Map<string, number>();
+  for (const entry of entries) {
+    totalsByCurrency.set(entry.currency, (totalsByCurrency.get(entry.currency) ?? 0) + entry.amount);
+  }
+  const totals: ReceiptTotal[] = [...totalsByCurrency.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([currency, amount]) => ({ currency, amount }));
+  return {
+    ...receipt,
+    fromDate: dates[0] ?? "",
+    toDate: dates.at(-1) ?? "",
+    entryCount: entries.length,
+    totals,
+    entries
+  };
 }

@@ -67,6 +67,15 @@ export interface EntryUpdateInput {
   memo?: string | null;
 }
 
+export interface ReceiptCreateInput {
+  entryIds: string[];
+  displayName?: string | null;
+}
+
+export interface ReceiptUpdateInput {
+  displayName: string | null;
+}
+
 export interface CategoryInput {
   code: string;
   name: string;

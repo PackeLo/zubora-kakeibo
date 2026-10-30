@@ -19,6 +19,8 @@ import type {
   EntrySourceItem,
   EntryType,
   FinancialAsset,
+  Receipt,
+  ReceiptFilters,
   SourceType,
   SummaryFilters,
   Tag
@@ -34,6 +36,8 @@ import type {
   FinancialAssetInput,
   ManualEntryInput,
   PostEntrySourceItemInput,
+  ReceiptCreateInput,
+  ReceiptUpdateInput,
   TagInput
 } from "./inputs";
 
@@ -323,6 +327,7 @@ export class KakeiboUseCases {
     const count = await this.repos.entrySourceItems.countBySourceId(item.entrySourceId);
     if (count === 0) {
       await this.repos.entrySources.delete(item.entrySourceId);
+      await this.repos.receipts.deleteIfEmptyByEntrySourceId(item.entrySourceId);
       return { deletedSource: true };
     }
     await this.repos.entrySources.refreshStatus(item.entrySourceId);
@@ -383,6 +388,57 @@ export class KakeiboUseCases {
     return (await this.repos.entries.list(filters)).map((entry) => entryProfile(entry, this.config.displayNames ?? {}));
   }
 
+  async listReceipts(filters: ReceiptFilters) {
+    const sanitized = sanitizeReceiptFilters(filters);
+    await this.assertNotPurged(sanitized.from, sanitized.to);
+    return this.repos.receipts.list(sanitized);
+  }
+
+  async createReceipt(input: ReceiptCreateInput, actor: Actor): Promise<Receipt> {
+    const entryIds = [...new Set(input.entryIds)];
+    if (entryIds.length !== input.entryIds.length) validationError("entryIds must not contain duplicates");
+    if (entryIds.length < 2) validationError("at least two entries are required");
+    for (const entryId of entryIds) {
+      const entry = await this.repos.entries.findById(entryId);
+      if (!entry) notFound("entry not found");
+      if (entry.entryType !== "expense") validationError("only expense entries can belong to a receipt");
+      if (entry.archivedAt) throw new AppError("CONFLICT", "archived entry cannot belong to a receipt");
+      if (entry.receiptId) throw new AppError("CONFLICT", "entry already belongs to a receipt");
+      await this.assertDateWritable(entry.entryDate);
+    }
+    const now = nowIso();
+    const created = await this.repos.receipts.create({
+      id: newId("rct"),
+      entrySourceId: null,
+      displayName: normalizeReceiptDisplayName(input.displayName),
+      createdBy: actor.displayName,
+      createdAt: now,
+      updatedBy: actor.displayName,
+      updatedAt: now
+    }, entryIds);
+    if (!created) throw new AppError("CONFLICT", "entries changed while creating the receipt");
+    return created;
+  }
+
+  async updateReceipt(id: string, input: ReceiptUpdateInput, actor: Actor): Promise<Receipt> {
+    const receipt = await this.repos.receipts.findById(id);
+    if (!receipt) notFound("receipt not found");
+    await this.assertReceiptEntriesWritable(id);
+    return this.repos.receipts.update(id, {
+      displayName: normalizeReceiptDisplayName(input.displayName),
+      updatedBy: actor.displayName,
+      updatedAt: nowIso()
+    });
+  }
+
+  async deleteReceipt(id: string) {
+    const receipt = await this.repos.receipts.findById(id);
+    if (!receipt) notFound("receipt not found");
+    await this.assertReceiptEntriesWritable(id);
+    await this.repos.receipts.delete(id);
+    return { ungrouped: true };
+  }
+
   async updateEntry(id: string, input: EntryUpdateInput) {
     const existing = await this.getEntry(id);
     const { expectedRevision, tagIds, ...patch } = input;
@@ -395,6 +451,7 @@ export class KakeiboUseCases {
       const previousIds = new Set(existing.tags.map((tag) => tag.id));
       await this.assertTagsCanBeUsed(tagIds.filter((id) => !previousIds.has(id)));
     }
+    if (existing.receiptId && next.entryType !== "expense") validationError("レシートにまとめた明細は支出のままにしてね。");
     if (input.subjectUserId !== undefined && input.subjectUserId !== existing.subjectUserId &&
         !(await this.repos.users.listActive()).some((user) => user.id === input.subjectUserId)) validationError("対象者は有効な家族から選んでね。");
     const updated = await this.repos.entries.update(next, expectedRevision, tagIds === undefined ? undefined : [...new Set(tagIds)]);
@@ -416,6 +473,7 @@ export class KakeiboUseCases {
     await this.assertDateWritable(existing.entryDate);
     await this.repos.duplicates.deleteByEntryId(id);
     await this.repos.entries.delete(id);
+    if (existing.receiptId) await this.repos.receipts.deleteIfEmpty(existing.receiptId);
     if (existing.entrySourceItemId) {
       const item = await this.repos.entrySourceItems.findById(existing.entrySourceItemId);
       const source = existing.entrySourceId ? await this.repos.entrySources.findById(existing.entrySourceId) : null;
@@ -586,6 +644,7 @@ export class KakeiboUseCases {
       }
       return this.repos.archives.updateYear(existing.id, {
         status: "due",
+        archiveFormatVersion: 2,
         entryCount: stats.entryCount,
         expenseCount: stats.expenseCount,
         incomeCount: stats.incomeCount,
@@ -599,7 +658,7 @@ export class KakeiboUseCases {
       year,
       status: "due",
       archiveFormat: "ndjson.gz",
-      archiveFormatVersion: 1,
+      archiveFormatVersion: 2,
       ...stats,
       lastExportId: null,
       lastExportedAt: null,
@@ -631,12 +690,24 @@ export class KakeiboUseCases {
     const exportId = newId("aexp");
     const entries = await this.repos.entries.listByYear(year);
     const stats = summarizeEntries(entries);
+    const receiptCache = new Map<string, Receipt | null>();
+    const entryRecords: Record<string, unknown>[] = [];
+    for (const entry of entries) {
+      let receipt: Receipt | null = null;
+      if (entry.receiptId) {
+        if (!receiptCache.has(entry.receiptId)) {
+          receiptCache.set(entry.receiptId, await this.repos.receipts.findById(entry.receiptId));
+        }
+        receipt = receiptCache.get(entry.receiptId) ?? null;
+      }
+      entryRecords.push(archiveEntryRecord(entry, receipt));
+    }
     const linesWithoutFooter = [
       archiveHeader(exportId, year, now),
-      { type: "schema_info", app_schema_version: 1 },
+      { type: "schema_info", app_schema_version: 2 },
       ...(await this.repos.taxonomy.listCategories(true)).map((category) => ({ type: "category_snapshot", category })),
       ...(await this.repos.taxonomy.listTags(true)).map((tag) => ({ type: "tag_snapshot", tag })),
-      ...entries.map(archiveEntryRecord)
+      ...entryRecords
     ].map((record) => JSON.stringify(record));
     const payload = `${linesWithoutFooter.join("\n")}\n`;
     const payloadSha256 = await sha256Hex(payload);
@@ -647,7 +718,7 @@ export class KakeiboUseCases {
       year,
       filename: archiveFilename(year),
       archiveFormat: "ndjson.gz",
-      archiveFormatVersion: 1,
+      archiveFormatVersion: 2,
       contentSha256: payloadSha256,
       ...stats,
       generatedBy: actor.displayName,
@@ -659,6 +730,7 @@ export class KakeiboUseCases {
     await this.repos.archives.createExport(createdExport);
     await this.repos.archives.updateYear(archiveYear.id, {
       status: "exported",
+      archiveFormatVersion: 2,
       entryCount: stats.entryCount,
       expenseCount: stats.expenseCount,
       incomeCount: stats.incomeCount,
@@ -731,6 +803,7 @@ export class KakeiboUseCases {
         const count = await this.repos.entrySourceItems.countBySourceId(sourceId);
         if (count === 0) await this.repos.entrySources.delete(sourceId);
       }
+      await this.repos.receipts.deleteAllEmpty();
     } catch (error) {
       await this.repos.archives.updateYear(archiveYear.id, {
         status: "failed",
@@ -758,6 +831,23 @@ export class KakeiboUseCases {
     await this.assertCategoryCanBeUsed(input.entryType, input.categoryId ?? null, true);
     await this.assertTagsCanBeUsed(input.tagIds ?? []);
     const now = nowIso();
+    let receiptId: string | null = null;
+    if (input.entryType === "expense") {
+      const source = await this.repos.entrySources.findById(item.entrySourceId);
+      if (!source) notFound("entry source not found");
+      if (source.sourceType === "receipt") {
+        const receipt = await this.repos.receipts.ensureForEntrySource({
+          id: newId("rct"),
+          entrySourceId: source.id,
+          displayName: normalizeReceiptDisplayName(source.displayName),
+          createdBy: actor.displayName,
+          createdAt: now,
+          updatedBy: actor.displayName,
+          updatedAt: now
+        });
+        receiptId = receipt.id;
+      }
+    }
     const entry: Entry = {
       id: newId("ent"),
       revision: crypto.randomUUID(),
@@ -771,6 +861,7 @@ export class KakeiboUseCases {
       memo: input.memo ?? null,
       entrySourceId: item.entrySourceId,
       entrySourceItemId: item.id,
+      receiptId,
       dedupeKey: createDedupeKey(input.entryType, input.currency ?? "JPY", input.amount),
       fixedAt: now,
       archivedAt: null,
@@ -796,7 +887,10 @@ export class KakeiboUseCases {
       updatedAt: now
     };
     const created = await this.repos.entries.postSourceItem(entry, input.tagIds ?? [], updatedItem, item.updatedAt);
-    if (!created) throw new AppError("CONFLICT", "明細が変更または確定されたよ。再取得して確認してね。");
+    if (!created) {
+      if (receiptId) await this.repos.receipts.deleteIfEmpty(receiptId);
+      throw new AppError("CONFLICT", "明細が変更または確定されたよ。再取得して確認してね。");
+    }
     return created;
   }
 
@@ -846,6 +940,12 @@ export class KakeiboUseCases {
     }
   }
 
+  private async assertReceiptEntriesWritable(receiptId: string): Promise<void> {
+    const entries = await this.repos.entries.list({ receiptIds: [receiptId] });
+    if (entries.length === 0) notFound("receipt has no entries");
+    for (const entry of entries) await this.assertDateWritable(entry.entryDate);
+  }
+
   private isComparableSourcePair(a: SourceType, b: SourceType): boolean {
     return (SOURCE_GROUP_A.includes(a) && SOURCE_GROUP_B.includes(b)) || (SOURCE_GROUP_B.includes(a) && SOURCE_GROUP_A.includes(b));
   }
@@ -872,6 +972,17 @@ export function sanitizeEntryFilters(filters: EntryFilters): EntryFilters {
   return filters;
 }
 
+export function sanitizeReceiptFilters(filters: ReceiptFilters): ReceiptFilters {
+  if (filters.from) assertIsoDate(filters.from, "from");
+  if (filters.to) assertIsoDate(filters.to, "to");
+  if (filters.from && filters.to && filters.from > filters.to) validationError("from must be earlier than or equal to to");
+  if (!Number.isInteger(filters.page) || filters.page <= 0) validationError("page must be positive integer");
+  if (!Number.isInteger(filters.pageSize) || filters.pageSize <= 0 || filters.pageSize > 100) {
+    validationError("pageSize must be an integer between 1 and 100");
+  }
+  return filters;
+}
+
 export function sanitizeActionItemAmount(amount: number | null | undefined): number | null | undefined {
   assertNullableAmount(amount);
   return amount;
@@ -879,4 +990,9 @@ export function sanitizeActionItemAmount(amount: number | null | undefined): num
 
 function isWriteLockedArchiveStatus(status: ArchiveYear["status"]): boolean {
   return status === "external_confirmed" || status === "purging" || status === "purged";
+}
+
+function normalizeReceiptDisplayName(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
 }

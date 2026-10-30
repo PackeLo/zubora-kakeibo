@@ -5,6 +5,7 @@ export type IdPrefix =
   | "es"
   | "esi"
   | "ent"
+  | "rct"
   | "fa"
   | "dex"
   | "arch"

@@ -6,7 +6,7 @@ import type { Category, Entry, Tag } from "../../app/front/src/api/client";
 const category: Category = { id: "cat_food", code: "food", name: "食費", kind: "expense", sortOrder: 0, dedupeEnabled: true, isActive: true };
 const tag: Tag = { id: "tag_family", name: "家族", isActive: true };
 const entry: Entry = { id: "ent_edit", revision: "original", entryType: "expense", entryDate: "2026-10-24", amount: 100,
-  currency: "JPY", subjectUserId: "usr_me", categoryId: category.id, category, tags: [tag], target: "お弁当", memo: "メモ" };
+  currency: "JPY", subjectUserId: "usr_me", categoryId: category.id, category, receiptId: null, tags: [tag], target: "お弁当", memo: "メモ" };
 const wrappers: VueWrapper[] = [];
 let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 function editor(value: Entry | null = entry) {

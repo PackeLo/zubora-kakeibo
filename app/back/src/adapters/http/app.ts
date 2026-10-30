@@ -23,6 +23,8 @@ import {
   parseCsv,
   parseNumber,
   postEntrySourceItemSchema,
+  receiptCreateSchema,
+  receiptUpdateSchema,
   tagSchema,
   tagUpdateSchema
 } from "./schemas";
@@ -173,6 +175,11 @@ export function createApiApp(factory: (env: Env) => UnitOfWork) {
   app.patch("/api/entries/:id", async (c) => c.json(await useCases(c).updateEntry(c.req.param("id"), entryUpdateSchema.parse(await c.req.json()))));
   app.delete("/api/entries/:id", async (c) => c.json(await useCases(c).deleteEntry(c.req.param("id"))));
 
+  app.get("/api/receipts", async (c) => c.json(await useCases(c).listReceipts(receiptFilters(c.req.query()))));
+  app.post("/api/receipts", async (c) => c.json(await useCases(c).createReceipt(receiptCreateSchema.parse(await c.req.json()), currentActor(c)), 201));
+  app.patch("/api/receipts/:id", async (c) => c.json(await useCases(c).updateReceipt(c.req.param("id"), receiptUpdateSchema.parse(await c.req.json()), currentActor(c))));
+  app.delete("/api/receipts/:id", async (c) => c.json(await useCases(c).deleteReceipt(c.req.param("id"))));
+
   app.get("/api/financial-assets", async (c) => c.json({ items: await useCases(c).listFinancialAssets(c.req.query("includeInactive") === "true") }));
   app.post("/api/financial-assets", async (c) => c.json(await useCases(c).createFinancialAsset(financialAssetSchema.parse(await c.req.json()), currentActor(c)), 201));
   app.patch("/api/financial-assets/:id", async (c) => c.json(await useCases(c).updateFinancialAsset(c.req.param("id"), financialAssetUpdateSchema.parse(await c.req.json()), currentActor(c))));
@@ -259,6 +266,18 @@ function summaryFilters(query: Record<string, string>) {
   return {
     ...entryFilters(query),
     year: parseNumber(query.year)
+  };
+}
+
+function receiptFilters(query: Record<string, string>) {
+  return {
+    from: query.from,
+    to: query.to,
+    categoryIds: parseCsv(query.categoryIds),
+    tagIds: parseCsv(query.tagIds),
+    subjectUserIds: parseCsv(query.subjectUserIds),
+    page: query.page === undefined ? 1 : Number(query.page),
+    pageSize: query.pageSize === undefined ? 20 : Number(query.pageSize)
   };
 }
 

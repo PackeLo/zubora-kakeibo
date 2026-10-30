@@ -101,6 +101,9 @@ describe("household MCP tools", () => {
       expect((await fixture.request(`/api/entry-source-items/${itemIds[0]}`, { method: "PATCH", headers, body: JSON.stringify({ amount: 120 }) })).status).toBe(200);
       const posted = await fixture.request(`/api/entry-source-items/${itemIds[0]}/post`, { method: "POST", headers, body: JSON.stringify({ entryType: "expense", entryDate: day, amount: 120, currency: "JPY", subjectUserId: "usr_access_admin@example.test", categoryId, tagIds: [tagId] }) });
       expect(posted.status).toBe(200);
+      const receipts = await fixture.request(`/api/receipts?from=${day}&to=${day}`, { headers });
+      expect(receipts.status).toBe(200);
+      expect(await receipts.json()).toMatchObject({ totalItems: 1, items: [{ entryCount: 1, totals: [{ currency: "JPY", amount: 120 }] }] });
       expect(await data(client, "getCategoryInsights", { from: day, to: day, tagIds: [tagId] })).toMatchObject({ items: [{ amount: 120, categoryId }] });
       expect(await data(client, "deleteCategory", { id: categoryId })).toMatchObject({ mode: "deactivated" });
       expect(await data(client, "deleteTag", { id: tagId })).toMatchObject({ mode: "deactivated" });

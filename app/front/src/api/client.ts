@@ -93,10 +93,36 @@ export interface Entry {
   categoryId: string | null;
   target: string | null;
   memo: string | null;
+  receiptId: string | null;
   category?: Category | null;
   tags: Tag[];
   registeredBy?: PersonProfile | null;
   fixedAt?: string | null;
+}
+
+export interface ReceiptTotal {
+  currency: string;
+  amount: number;
+}
+
+export interface Receipt {
+  id: string;
+  entrySourceId: string | null;
+  displayName: string | null;
+  fromDate: string;
+  toDate: string;
+  entryCount: number;
+  totals: ReceiptTotal[];
+  entries: Entry[];
+}
+
+export interface ReceiptPage {
+  items: Receipt[];
+  page: number;
+  pageSize: number;
+  totalItems: number;
+  totalPages: number;
+  filteredReceiptTotals: ReceiptTotal[];
 }
 
 export interface EntrySourceItem {

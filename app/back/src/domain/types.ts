@@ -107,6 +107,16 @@ export interface EntrySourceItem {
   updatedAt: string;
 }
 
+export interface Receipt {
+  id: string;
+  entrySourceId?: string | null;
+  displayName?: string | null;
+  createdBy?: string | null;
+  createdAt: string;
+  updatedBy?: string | null;
+  updatedAt: string;
+}
+
 export interface Entry {
   id: string;
   revision: string;
@@ -120,6 +130,7 @@ export interface Entry {
   memo?: string | null;
   entrySourceId?: string | null;
   entrySourceItemId?: string | null;
+  receiptId: string | null;
   dedupeKey?: string | null;
   fixedAt?: string | null;
   archivedAt?: string | null;
@@ -133,6 +144,38 @@ export interface EntryWithDetails extends Entry {
   tags: Tag[];
   source?: EntrySource | null;
   sourceItem?: EntrySourceItem | null;
+}
+
+export interface ReceiptTotal {
+  currency: string;
+  amount: number;
+}
+
+export interface ReceiptView extends Receipt {
+  fromDate: string;
+  toDate: string;
+  entryCount: number;
+  totals: ReceiptTotal[];
+  entries: EntryWithDetails[];
+}
+
+export interface ReceiptFilters {
+  from?: string;
+  to?: string;
+  categoryIds?: string[];
+  tagIds?: string[];
+  subjectUserIds?: string[];
+  page: number;
+  pageSize: number;
+}
+
+export interface ReceiptPage {
+  items: ReceiptView[];
+  page: number;
+  pageSize: number;
+  totalItems: number;
+  totalPages: number;
+  filteredReceiptTotals: ReceiptTotal[];
 }
 
 export interface FinancialAsset {
@@ -225,6 +268,7 @@ export interface EntryFilters {
   excludedTagIds?: string[];
   subjectUserIds?: string[];
   registeredByEmails?: string[];
+  receiptIds?: string[];
   limit?: number;
 }
 

@@ -43,6 +43,11 @@ button:hover {
   background: #f1f5f9;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 button.active,
 button.primary {
   background: #2563eb;
@@ -166,6 +171,18 @@ nav button {
   gap: 8px;
 }
 
+.filter-static {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 13px;
+}
+
 .notice,
 .error,
 .loading {
@@ -255,6 +272,108 @@ nav button {
   display: flex;
   gap: 6px;
   justify-content: flex-end;
+}
+
+.receipt-group-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.row-checkbox {
+  width: 18px;
+  min-height: 18px;
+  display: block;
+}
+
+.receipt-view {
+  display: grid;
+  gap: 12px;
+}
+
+.receipt-summary,
+.receipt-card-head,
+.receipt-meta,
+.receipt-card-actions,
+.receipt-pagination {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.receipt-summary,
+.receipt-card-head {
+  justify-content: space-between;
+}
+
+.receipt-summary h2 {
+  margin-bottom: 4px;
+}
+
+.receipt-summary p {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.receipt-summary-totals,
+.receipt-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.receipt-summary-totals {
+  gap: 8px;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.receipt-title-edit {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) auto;
+  gap: 8px;
+  min-width: 0;
+}
+
+.receipt-entry-list {
+  display: grid;
+  margin-top: 12px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.receipt-entry-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 2fr) minmax(90px, 1fr) minmax(90px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.receipt-entry-target,
+.receipt-entry-tags {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.receipt-entry-tags {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.receipt-card-actions {
+  justify-content: flex-end;
+  padding-top: 12px;
+}
+
+.receipt-pagination {
+  justify-content: center;
+}
+
+.empty-state {
+  margin: 0;
 }
 
 .calendar-grid {
@@ -367,8 +486,22 @@ nav button {
 
   .filters,
   .content-grid,
-  .split {
+  .split,
+  .receipt-group-form,
+  .receipt-title-edit,
+  .receipt-entry-row {
     grid-template-columns: 1fr;
+  }
+
+  .receipt-summary,
+  .receipt-card-head,
+  .receipt-meta {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .receipt-summary-totals {
+    justify-content: flex-start;
   }
 
   .calendar-grid {

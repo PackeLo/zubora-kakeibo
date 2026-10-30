@@ -5,7 +5,7 @@ import EntryList from "../../app/front/src/components/EntryList.vue";
 import type { Entry } from "../../app/front/src/api/client";
 
 const entry: Entry = { id: "ent_detail", revision: "private-revision", entryType: "expense", entryDate: "2026-10-24", amount: 1234,
-  currency: "JPY", subjectUserId: "user_hiro", categoryId: null, tags: [{ id: "tag", name: "スーパー", isActive: true }],
+  currency: "JPY", subjectUserId: "user_hiro", categoryId: null, receiptId: null, tags: [{ id: "tag", name: "スーパー", isActive: true }],
   target: "週末の買い物", memo: "1行目\n<img src=x onerror=alert(1)>\n" + "長文".repeat(100),
   registeredBy: { email: "yuka@example.test", displayName: "ゆうか" } };
 

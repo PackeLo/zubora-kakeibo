@@ -1,4 +1,4 @@
-import type { ArchiveYear, EntryWithDetails } from "./types";
+import type { ArchiveYear, EntryWithDetails, Receipt } from "./types";
 import { yearRange } from "./dates";
 
 export interface ArchiveStats {
@@ -28,20 +28,20 @@ export function summarizeEntries(entries: EntryWithDetails[]): ArchiveStats {
 }
 
 export function archiveFilename(year: number): string {
-  return `kakeibo-archive-${year}-v1.ndjson.gz`;
+  return `kakeibo-archive-${year}-v2.ndjson.gz`;
 }
 
 export function archiveHeader(exportId: string, year: number, createdAt: string): Record<string, unknown> {
   const period = yearRange(year);
   return {
     type: "archive_header",
-    format_version: 1,
+    format_version: 2,
     export_id: exportId,
     year,
     period,
     timezone: "Asia/Tokyo",
     created_at: createdAt,
-    app_schema_version: 1
+    app_schema_version: 2
   };
 }
 
@@ -63,7 +63,7 @@ export function archiveFooter(exportId: string, stats: ArchiveStats, payloadSha2
   };
 }
 
-export function archiveEntryRecord(entry: EntryWithDetails): Record<string, unknown> {
+export function archiveEntryRecord(entry: EntryWithDetails, receipt: Receipt | null = null): Record<string, unknown> {
   return {
     type: "entry",
     id: entry.id,
@@ -88,6 +88,12 @@ export function archiveEntryRecord(entry: EntryWithDetails): Record<string, unkn
           source_type: entry.source.sourceType,
           source_file_name: entry.source.sourceFileName ?? null,
           source_sha256: entry.source.sourceSha256 ?? null
+        }
+      : null,
+    receipt: receipt
+      ? {
+          id: receipt.id,
+          display_name: receipt.displayName ?? null
         }
       : null,
     fixed_at: entry.fixedAt ?? null

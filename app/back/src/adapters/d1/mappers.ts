@@ -6,6 +6,7 @@ import type {
   EntrySource,
   EntrySourceItem,
   FinancialAsset,
+  Receipt,
   Tag,
   User
 } from "../../domain/types";
@@ -117,10 +118,23 @@ export function entryFromRow(row: Row): Entry {
     memo: row.memo as string | null,
     entrySourceId: row.entry_source_id as string | null,
     entrySourceItemId: row.entry_source_item_id as string | null,
+    receiptId: row.receipt_id as string | null,
     dedupeKey: row.dedupe_key as string | null,
     fixedAt: row.fixed_at as string | null,
     archivedAt: row.archived_at as string | null,
     archiveYearId: row.archive_year_id as string | null
+  };
+}
+
+export function receiptFromRow(row: Row): Receipt {
+  return {
+    id: String(row.id),
+    entrySourceId: row.entry_source_id as string | null,
+    displayName: row.display_name as string | null,
+    createdBy: row.created_by as string | null,
+    createdAt: String(row.created_at),
+    updatedBy: row.updated_by as string | null,
+    updatedAt: String(row.updated_at)
   };
 }
 
