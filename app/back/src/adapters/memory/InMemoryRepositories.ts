@@ -1,4 +1,4 @@
-import type { Actor, ArchiveExport, ArchiveYear, Category, DuplicateExclusion, Entry, EntryFilters, EntrySource, EntrySourceItem, EntryType, EntryWithDetails, FinancialAsset, SourceType, SummaryFilters, Tag, User } from "../../domain/types";
+import type { Actor, ArchiveExport, ArchiveYear, Category, DuplicateExclusion, Entry, EntryFilters, EntrySource, EntrySourceItem, EntryType, EntryWithDetails, FinancialAsset, Receipt, ReceiptFilters, ReceiptPage, ReceiptTotal, ReceiptView, SourceType, SummaryFilters, Tag, User } from "../../domain/types";
 import type {
   HouseholdOverview,
   ArchiveRepository,
@@ -10,6 +10,7 @@ import type {
   EntrySourceRepository,
   FinancialAssetRepository,
   MonthlySummary,
+  ReceiptRepository,
   SummaryRepository,
   TaxonomyRepository,
   UnitOfWork,
@@ -30,10 +31,12 @@ export class InMemoryUnitOfWork implements UnitOfWork {
   financialAssets = new MemoryFinancialAssetRepository();
   archives = new MemoryArchiveRepository();
   entries: MemoryEntryRepository;
+  receipts: ReceiptRepository;
   summaries: SummaryRepository;
 
   constructor() {
     this.entries = new MemoryEntryRepository(this.taxonomy, this.entrySources, this.entrySourceItems);
+    this.receipts = new MemoryReceiptRepository(this.entries);
     this.summaries = new MemorySummaryRepository(this.entries);
   }
 }
@@ -249,6 +252,7 @@ class MemoryEntryRepository implements EntryRepository {
       if (filters.subjectUserIds?.length && (!entry.subjectUserId || !filters.subjectUserIds.includes(entry.subjectUserId))) return false;
       const tagIds = this.entryTags.get(entry.id) ?? [];
       if (filters.tagIds?.length && !filters.tagIds.some((id) => tagIds.includes(id))) return false;
+      if (filters.receiptIds?.length && (!entry.receiptId || !filters.receiptIds.includes(entry.receiptId))) return false;
       return !entry.archivedAt;
     });
     return Promise.all(rows.slice(0, filters.limit ?? rows.length).map((entry) => this.withDetails(entry)));
@@ -302,6 +306,95 @@ class MemoryEntryRepository implements EntryRepository {
       source: entry.entrySourceId ? await this.entrySources.findById(entry.entrySourceId) : null,
       sourceItem: entry.entrySourceItemId ? await this.entrySourceItems.findById(entry.entrySourceItemId) : null
     };
+  }
+}
+
+class MemoryReceiptRepository implements ReceiptRepository {
+  rows = new Map<string, Receipt>();
+
+  constructor(private readonly entries: MemoryEntryRepository) {}
+
+  async list(filters: ReceiptFilters): Promise<ReceiptPage> {
+    const views: ReceiptView[] = [];
+    for (const receipt of this.rows.values()) {
+      const entries = await this.entries.list({ receiptIds: [receipt.id] });
+      if (entries.length === 0 || !entries.some((entry) => receiptEntryMatches(entry, filters))) continue;
+      views.push(memoryReceiptView(receipt, entries));
+    }
+    views.sort((a, b) => b.toDate.localeCompare(a.toDate) || b.updatedAt.localeCompare(a.updatedAt));
+    const totalItems = views.length;
+    const start = (filters.page - 1) * filters.pageSize;
+    const totalsByCurrency = new Map<string, number>();
+    for (const view of views) {
+      for (const total of view.totals) {
+        totalsByCurrency.set(total.currency, (totalsByCurrency.get(total.currency) ?? 0) + total.amount);
+      }
+    }
+    return {
+      items: views.slice(start, start + filters.pageSize),
+      page: filters.page,
+      pageSize: filters.pageSize,
+      totalItems,
+      totalPages: totalItems === 0 ? 0 : Math.ceil(totalItems / filters.pageSize),
+      filteredReceiptTotals: [...totalsByCurrency.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([currency, amount]) => ({ currency, amount }))
+    };
+  }
+
+  async findById(id: string): Promise<Receipt | null> {
+    return this.rows.get(id) ?? null;
+  }
+
+  async findByEntrySourceId(entrySourceId: string): Promise<Receipt | null> {
+    return [...this.rows.values()].find((receipt) => receipt.entrySourceId === entrySourceId) ?? null;
+  }
+
+  async ensureForEntrySource(receipt: Receipt): Promise<Receipt> {
+    const existing = receipt.entrySourceId ? await this.findByEntrySourceId(receipt.entrySourceId) : null;
+    if (existing) return existing;
+    this.rows.set(receipt.id, receipt);
+    return receipt;
+  }
+
+  async create(receipt: Receipt, entryIds: string[]): Promise<Receipt | null> {
+    if (entryIds.length < 2 || new Set(entryIds).size !== entryIds.length) return null;
+    const entries = entryIds.map((entryId) => this.entries.rows.get(entryId));
+    if (entries.some((entry) => !entry || entry.entryType !== "expense" || entry.receiptId || entry.archivedAt)) return null;
+    this.rows.set(receipt.id, receipt);
+    for (const [index, entryId] of entryIds.entries()) {
+      const entry = entries[index]!;
+      this.entries.rows.set(entryId, { ...entry, receiptId: receipt.id });
+    }
+    return receipt;
+  }
+
+  async update(id: string, patch: Partial<Receipt>): Promise<Receipt> {
+    const existing = this.rows.get(id);
+    if (!existing) throw new Error("receipt not found");
+    const next = { ...existing, ...defined(patch) };
+    this.rows.set(id, next);
+    return next;
+  }
+
+  async delete(id: string): Promise<void> {
+    for (const [entryId, entry] of this.entries.rows) {
+      if (entry.receiptId === id) this.entries.rows.set(entryId, { ...entry, receiptId: null });
+    }
+    this.rows.delete(id);
+  }
+
+  async deleteIfEmpty(id: string): Promise<void> {
+    if (![...this.entries.rows.values()].some((entry) => entry.receiptId === id)) this.rows.delete(id);
+  }
+
+  async deleteIfEmptyByEntrySourceId(entrySourceId: string): Promise<void> {
+    const receipt = await this.findByEntrySourceId(entrySourceId);
+    if (receipt) await this.deleteIfEmpty(receipt.id);
+  }
+
+  async deleteAllEmpty(): Promise<void> {
+    for (const receipt of [...this.rows.values()]) await this.deleteIfEmpty(receipt.id);
   }
 }
 
@@ -481,4 +574,33 @@ class MemoryArchiveRepository implements ArchiveRepository {
 
 function defined<T extends Record<string, unknown>>(patch: T): Partial<T> {
   return Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) as Partial<T>;
+}
+
+function receiptEntryMatches(entry: EntryWithDetails, filters: ReceiptFilters): boolean {
+  if (entry.entryType !== "expense" || entry.archivedAt) return false;
+  if (filters.from && entry.entryDate < filters.from) return false;
+  if (filters.to && entry.entryDate > filters.to) return false;
+  if (filters.categoryIds?.length && (!entry.categoryId || !filters.categoryIds.includes(entry.categoryId))) return false;
+  if (filters.subjectUserIds?.length && (!entry.subjectUserId || !filters.subjectUserIds.includes(entry.subjectUserId))) return false;
+  if (filters.tagIds?.length && !entry.tags.some((tag) => filters.tagIds?.includes(tag.id))) return false;
+  return true;
+}
+
+function memoryReceiptView(receipt: Receipt, entries: EntryWithDetails[]): ReceiptView {
+  const dates = entries.map((entry) => entry.entryDate).sort();
+  const totalsByCurrency = new Map<string, number>();
+  for (const entry of entries) {
+    totalsByCurrency.set(entry.currency, (totalsByCurrency.get(entry.currency) ?? 0) + entry.amount);
+  }
+  const totals: ReceiptTotal[] = [...totalsByCurrency.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([currency, amount]) => ({ currency, amount }));
+  return {
+    ...receipt,
+    fromDate: dates[0] ?? "",
+    toDate: dates.at(-1) ?? "",
+    entryCount: entries.length,
+    totals,
+    entries
+  };
 }

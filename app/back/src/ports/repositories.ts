@@ -12,6 +12,9 @@ import type {
   EntryType,
   EntryWithDetails,
   FinancialAsset,
+  Receipt,
+  ReceiptFilters,
+  ReceiptPage,
   SourceType,
   SummaryFilters,
   Tag,
@@ -81,6 +84,19 @@ export interface EntryRepository {
   }): Promise<EntryWithDetails[]>;
   listByYear(year: number): Promise<EntryWithDetails[]>;
   deleteByYear(year: number): Promise<void>;
+}
+
+export interface ReceiptRepository {
+  list(filters: ReceiptFilters): Promise<ReceiptPage>;
+  findById(id: string): Promise<Receipt | null>;
+  findByEntrySourceId(entrySourceId: string): Promise<Receipt | null>;
+  ensureForEntrySource(receipt: Receipt): Promise<Receipt>;
+  create(receipt: Receipt, entryIds: string[]): Promise<Receipt | null>;
+  update(id: string, patch: Partial<Receipt>): Promise<Receipt>;
+  delete(id: string): Promise<void>;
+  deleteIfEmpty(id: string): Promise<void>;
+  deleteIfEmptyByEntrySourceId(entrySourceId: string): Promise<void>;
+  deleteAllEmpty(): Promise<void>;
 }
 
 export interface FinancialAssetRepository {
@@ -163,6 +179,7 @@ export interface UnitOfWork {
   entrySources: EntrySourceRepository;
   entrySourceItems: EntrySourceItemRepository;
   entries: EntryRepository;
+  receipts: ReceiptRepository;
   financialAssets: FinancialAssetRepository;
   duplicates: DuplicateRepository;
   summaries: SummaryRepository;

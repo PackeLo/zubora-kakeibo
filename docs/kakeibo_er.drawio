@@ -25,8 +25,11 @@
                 <mxCell id="mxCell-8" value="entry_source_items / エントリソース明細&lt;br&gt;PK id / エントリソース明細ID VARCHAR(40)&lt;br&gt;FK entry_source_id / エントリソースID VARCHAR(40)&lt;br&gt;item_index / 明細順 INTEGER&lt;br&gt;entry_type / エントリ種別 VARCHAR(20) expense/income&lt;br&gt;FK subject_user_id / 対象ユーザーID VARCHAR(40) nullable&lt;br&gt;entry_date / エントリ日 VARCHAR(10) nullable&lt;br&gt;amount / 金額 INTEGER nullable&lt;br&gt;currency / 通貨 VARCHAR(3)&lt;br&gt;target / 用途 VARCHAR(500)&lt;br&gt;FK category_id_guess / 推定カテゴリID VARCHAR(40) nullable&lt;br&gt;category_name_guess / 推定カテゴリ名 VARCHAR(100)&lt;br&gt;tags_json / タグJSON VARCHAR(2000)&lt;br&gt;memo / メモ VARCHAR(1000)&lt;br&gt;confidence / 信頼度 REAL&lt;br&gt;dedupe_key / 重複比較キー VARCHAR(255)&lt;br&gt;status / 状態 VARCHAR(20) pending/posted&lt;br&gt;FK posted_entry_id / 転記エントリID VARCHAR(40) nullable&lt;br&gt;created_at / 作成日時 DATETIME&lt;br&gt;updated_at / 更新日時 DATETIME" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#fff3e0;strokeColor=#f57c00;fontSize=11" parent="1" vertex="1">
                     <mxGeometry x="610" y="440" width="370" height="430" as="geometry"/>
                 </mxCell>
-                <mxCell id="mxCell-9" value="entries / エントリ&#xa;PK id / エントリID VARCHAR(40)&#xa;entry_type / エントリ種別 VARCHAR(20) expense/income&#xa;FK subject_user_id / 対象ユーザーID VARCHAR(40) nullable&#xa;entry_date / エントリ日 VARCHAR(10)&#xa;amount / 金額 INTEGER&#xa;currency / 通貨 VARCHAR(3)&#xa;FK category_id / カテゴリID VARCHAR(40) nullable&#xa;target / 用途 VARCHAR(500)&#xa;memo / メモ VARCHAR(1000)&#xa;FK entry_source_id / エントリソースID VARCHAR(40) nullable&#xa;FK entry_source_item_id / エントリソース明細ID VARCHAR(40) nullable&#xa;dedupe_key / 重複比較キー VARCHAR(255)&#xa;fixed_at / 確定日時 DATETIME&#xa;archived_at / アーカイブ日時 DATETIME&#xa;FK archive_year_id / アーカイブ年ID VARCHAR(40) nullable" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#f3e5f5;strokeColor=#7b1fa2;fontSize=11" parent="1" vertex="1">
-                    <mxGeometry x="610" y="1160" width="640" height="300" as="geometry"/>
+                <mxCell id="mxCell-9" value="entries / エントリ&#xa;PK id / エントリID VARCHAR(40)&#xa;entry_type / エントリ種別 VARCHAR(20) expense/income&#xa;FK subject_user_id / 対象ユーザーID VARCHAR(40) nullable&#xa;entry_date / エントリ日 VARCHAR(10)&#xa;amount / 金額 INTEGER&#xa;currency / 通貨 VARCHAR(3)&#xa;FK category_id / カテゴリID VARCHAR(40) nullable&#xa;target / 用途 VARCHAR(500)&#xa;memo / メモ VARCHAR(1000)&#xa;FK entry_source_id / エントリソースID VARCHAR(40) nullable&#xa;FK entry_source_item_id / エントリソース明細ID VARCHAR(40) nullable&#xa;FK receipt_id / レシートID VARCHAR(40) nullable&#xa;dedupe_key / 重複比較キー VARCHAR(255)&#xa;fixed_at / 確定日時 DATETIME&#xa;archived_at / アーカイブ日時 DATETIME&#xa;FK archive_year_id / アーカイブ年ID VARCHAR(40) nullable" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#f3e5f5;strokeColor=#7b1fa2;fontSize=11" parent="1" vertex="1">
+                    <mxGeometry x="610" y="1160" width="640" height="320" as="geometry"/>
+                </mxCell>
+                <mxCell id="mxCell-31" value="receipts / レシート&#xa;PK id / レシートID VARCHAR(40)&#xa;FK entry_source_id / エントリソースID VARCHAR(40) UNIQUE nullable&#xa;display_name / 表示名 VARCHAR(200)&#xa;created_by / 作成ユーザー名 VARCHAR(100)&#xa;created_at / 作成日時 DATETIME&#xa;updated_by / 更新ユーザー名 VARCHAR(100)&#xa;updated_at / 更新日時 DATETIME" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#f3e5f5;strokeColor=#7b1fa2;fontSize=11" parent="1" vertex="1">
+                    <mxGeometry x="1300" y="800" width="500" height="170" as="geometry"/>
                 </mxCell>
                 <mxCell id="mxCell-10" value="expense_entries / 支出エントリ&#xa;PK/FK entry_id / エントリID VARCHAR(40)" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#ede7f6;strokeColor=#7b1fa2;fontSize=11" parent="1" vertex="1">
                     <mxGeometry x="1300" y="1160" width="370" height="50" as="geometry"/>
@@ -125,6 +128,12 @@
                     </mxGeometry>
                 </mxCell>
                 <mxCell id="mxCell-30" value="not_duplicate" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;startArrow=ERzeroToOne;endArrow=ERmany;strokeColor=#f9a825;fontSize=10" parent="1" source="mxCell-14" target="mxCell-9" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mxCell-32" value="receipt source" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;startArrow=ERzeroToOne;endArrow=ERzeroToOne;strokeColor=#f57c00;fontSize=10" parent="1" source="mxCell-7" target="mxCell-31" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mxCell-33" value="groups" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;startArrow=ERzeroToOne;endArrow=ERmany;strokeColor=#7b1fa2;fontSize=10" parent="1" source="mxCell-31" target="mxCell-9" edge="1">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
             </root>

@@ -35,6 +35,15 @@ export const entryUpdateSchema = z.object({
   memo: z.string().nullable().optional()
 });
 
+export const receiptCreateSchema = z.object({
+  entryIds: z.array(z.string()).min(2).refine((ids) => new Set(ids).size === ids.length, "entryIds must not contain duplicates"),
+  displayName: z.string().max(200).nullable().optional()
+});
+
+export const receiptUpdateSchema = z.object({
+  displayName: z.string().max(200).nullable()
+});
+
 export const entrySourceUpdateSchema = z.object({
   displayName: z.string().nullable().optional(),
   sourceFileName: z.string().nullable().optional(),

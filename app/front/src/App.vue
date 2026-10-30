@@ -26,13 +26,15 @@ import {
   type Entry,
   type EntrySourceItem,
   type FinancialAsset,
+  type Receipt,
+  type ReceiptPage,
   type Tag,
   type User
 } from "./api/client";
 import { createPieSlices, formatCurrency } from "./utils/chart";
 import SourceItemReview from "./components/SourceItemReview.vue";
 
-type Tab = "dashboard" | "entries" | "source-items" | "duplicates" | "assets" | "taxonomy" | "archives";
+type Tab = "dashboard" | "entries" | "receipts" | "source-items" | "duplicates" | "assets" | "taxonomy" | "archives";
 
 const activeTab = ref<Tab>("dashboard");
 const loading = ref(false);
@@ -47,6 +49,10 @@ const taxonomy = reactive<{ categories: Category[]; incomeCategories: Category[]
   tags: []
 });
 const entries = ref<Entry[]>([]);
+const receiptPage = ref<ReceiptPage>({ items: [], page: 1, pageSize: 20, totalItems: 0, totalPages: 0, filteredReceiptTotals: [] });
+const selectedEntryIds = ref<string[]>([]);
+const receiptDisplayName = ref("");
+const receiptPageNumber = ref(1);
 const sourceItems = ref<EntrySourceItem[]>([]);
 const daily = ref<DailySummary[]>([]);
 const categorySummary = ref<CategorySummary[]>([]);
@@ -113,6 +119,7 @@ const archiveConfirm = reactive({
 const tabs: Array<{ key: Tab; label: string; icon: any }> = [
   { key: "dashboard", label: "ダッシュボード", icon: BarChart3 },
   { key: "entries", label: "支出・収入", icon: CircleDollarSign },
+  { key: "receipts", label: "レシート", icon: ListChecks },
   { key: "source-items", label: "登録元明細", icon: FolderInput },
   { key: "duplicates", label: "重複確認", icon: ListChecks },
   { key: "assets", label: "金融資産", icon: Database },
@@ -121,6 +128,7 @@ const tabs: Array<{ key: Tab; label: string; icon: any }> = [
 ];
 
 const allCategories = computed(() => [...taxonomy.categories, ...taxonomy.incomeCategories]);
+const filterCategories = computed(() => activeTab.value === "receipts" ? taxonomy.categories : allCategories.value);
 const activeCategoriesForForm = computed(() => allCategories.value.filter((category) => category.kind === entryForm.entryType && category.isActive));
 const pieSlices = computed(() => createPieSlices(categorySummary.value.map((item) => ({ label: item.categoryName, value: item.amount }))));
 const incomeTotal = computed(() => daily.value.reduce((sum, day) => sum + day.incomeTotal, 0));
@@ -151,9 +159,10 @@ async function refreshAll() {
       assetForm.ownerUserId = me.id;
     }
     currentUser.value = me;
-    const [tx, entryRows, itemRows, days, categories, assetRows, archiveRows, userRows] = await Promise.all([
+    const [tx, entryRows, receiptRows, itemRows, days, categories, assetRows, archiveRows, userRows] = await Promise.all([
       apiGet<typeof taxonomy>("/api/taxonomy", { includeInactive: true }),
       apiGet<{ items: Entry[] }>("/api/entries", buildFilterQuery()),
+      apiGet<ReceiptPage>("/api/receipts", buildReceiptFilterQuery()),
       apiGet<{ items: EntrySourceItem[] }>("/api/entry-source-items", { status: "pending", type: filters.type }),
       apiGet<{ days: DailySummary[] }>("/api/summaries/daily", buildFilterQuery()),
       apiGet<{ items: CategorySummary[] }>("/api/summaries/category", buildFilterQuery()),
@@ -165,6 +174,10 @@ async function refreshAll() {
     taxonomy.incomeCategories = tx.incomeCategories;
     taxonomy.tags = tx.tags;
     entries.value = entryRows.items;
+    selectedEntryIds.value = selectedEntryIds.value.filter((id) =>
+      entryRows.items.some((entry) => entry.id === id && entry.entryType === "expense" && !entry.receiptId)
+    );
+    receiptPage.value = receiptRows;
     sourceItems.value = itemRows.items;
     daily.value = days.days;
     categorySummary.value = categories.items;
@@ -196,6 +209,57 @@ async function deleteEntry(id: string) {
     await apiDelete(`/api/entries/${id}`);
     await refreshAll();
   });
+}
+
+async function createReceipt() {
+  await run(async () => {
+    await apiPost<Receipt>("/api/receipts", {
+      entryIds: selectedEntryIds.value,
+      displayName: receiptDisplayName.value || null
+    });
+    selectedEntryIds.value = [];
+    receiptDisplayName.value = "";
+    receiptPageNumber.value = 1;
+    await refreshAll();
+    notice.value = "選んだ明細をレシートにまとめた。";
+  });
+}
+
+async function saveReceiptName(receipt: Receipt) {
+  await run(async () => {
+    await apiPatch(`/api/receipts/${receipt.id}`, { displayName: receipt.displayName || null });
+    await refreshAll();
+    notice.value = "レシート名を保存した。";
+  });
+}
+
+async function ungroupReceipt(receipt: Receipt) {
+  if (!window.confirm(`${receipt.displayName || "レシート"}のまとまりを解除します。明細は削除されません。`)) return;
+  await run(async () => {
+    await apiDelete(`/api/receipts/${receipt.id}`);
+    await refreshAll();
+    notice.value = "レシートのまとまりを解除した。";
+  });
+}
+
+async function changeReceiptPage(page: number) {
+  if (page < 1 || (receiptPage.value.totalPages > 0 && page > receiptPage.value.totalPages)) return;
+  receiptPageNumber.value = page;
+  await refreshAll();
+}
+
+async function refreshFromFilters() {
+  receiptPageNumber.value = 1;
+  selectedEntryIds.value = [];
+  await refreshAll();
+}
+
+function formatReceiptAmount(amount: number, currency: string) {
+  try {
+    return new Intl.NumberFormat("ja-JP", { style: "currency", currency, maximumFractionDigits: 0 }).format(amount);
+  } catch {
+    return `${amount.toLocaleString("ja-JP")} ${currency}`;
+  }
 }
 
 async function deleteSourceItem(id: string) {
@@ -345,6 +409,19 @@ function buildFilterQuery() {
   };
 }
 
+function buildReceiptFilterQuery() {
+  const query = buildFilterQuery();
+  return {
+    from: query.from,
+    to: query.to,
+    categoryIds: query.categoryIds,
+    tagIds: query.tagIds,
+    subjectUserIds: query.subjectUserIds,
+    page: receiptPageNumber.value,
+    pageSize: 20
+  };
+}
+
 async function run(task: () => Promise<void>) {
   loading.value = true;
   error.value = "";
@@ -380,19 +457,20 @@ async function run(task: () => Promise<void>) {
     <main class="main">
       <header class="topbar">
         <div class="filters">
-          <select v-model="filters.type" @change="refreshAll">
+          <select v-if="activeTab !== 'receipts'" v-model="filters.type" @change="refreshFromFilters">
             <option value="expense">支出</option>
             <option value="income">収入</option>
           </select>
-          <input v-model="filters.from" type="date" @change="refreshAll" />
-          <input v-model="filters.to" type="date" @change="refreshAll" />
-          <select v-model="filters.categoryIds" multiple @change="refreshAll">
-            <option v-for="category in allCategories" :key="category.id" :value="category.id">{{ category.name }}</option>
+          <span v-else class="filter-static">支出レシート</span>
+          <input v-model="filters.from" type="date" @change="refreshFromFilters" />
+          <input v-model="filters.to" type="date" @change="refreshFromFilters" />
+          <select v-model="filters.categoryIds" multiple @change="refreshFromFilters">
+            <option v-for="category in filterCategories" :key="category.id" :value="category.id">{{ category.name }}</option>
           </select>
-          <select v-model="filters.tagIds" multiple @change="refreshAll">
+          <select v-model="filters.tagIds" multiple @change="refreshFromFilters">
             <option v-for="tag in taxonomy.tags" :key="tag.id" :value="tag.id">{{ tag.name }}</option>
           </select>
-          <input v-model="filters.subjectUserIdsText" placeholder="対象ユーザーID,ID" @change="refreshAll" />
+          <input v-model="filters.subjectUserIdsText" placeholder="対象ユーザーID,ID" @change="refreshFromFilters" />
         </div>
         <button class="icon-button" title="再読み込み" @click="refreshAll">
           <RefreshCw :size="18" />
@@ -486,22 +564,86 @@ async function run(task: () => Promise<void>) {
 
         <section class="panel list-panel">
           <h2><ListChecks :size="20" /> 明細</h2>
+          <form class="receipt-group-form" @submit.prevent="createReceipt">
+            <input v-model="receiptDisplayName" placeholder="レシート名（例: 〇〇パン）" />
+            <button class="primary" :disabled="selectedEntryIds.length < 2">選択した{{ selectedEntryIds.length }}件をまとめる</button>
+          </form>
           <table>
             <thead>
-              <tr><th>日付</th><th>種別</th><th>カテゴリ</th><th>用途</th><th>金額</th><th></th></tr>
+              <tr><th>選択</th><th>日付</th><th>種別</th><th>カテゴリ</th><th>用途</th><th>金額</th><th>レシート</th><th></th></tr>
             </thead>
             <tbody>
               <tr v-for="entry in entries" :key="entry.id">
+                <td>
+                  <input
+                    v-model="selectedEntryIds"
+                    class="row-checkbox"
+                    type="checkbox"
+                    :value="entry.id"
+                    :disabled="entry.entryType !== 'expense' || Boolean(entry.receiptId)"
+                    :aria-label="`${entry.target || entry.id}をレシートにまとめる`"
+                  />
+                </td>
                 <td>{{ entry.entryDate }}</td>
                 <td>{{ entry.entryType }}</td>
                 <td>{{ entry.category?.name ?? "未分類" }}</td>
                 <td>{{ entry.target }}</td>
                 <td>{{ formatCurrency(entry.amount) }}</td>
+                <td>{{ entry.receiptId ? "所属済み" : "—" }}</td>
                 <td><button class="icon-button danger" title="削除" @click="deleteEntry(entry.id)"><Trash2 :size="16" /></button></td>
               </tr>
             </tbody>
           </table>
         </section>
+      </section>
+
+      <section v-if="activeTab === 'receipts'" class="receipt-view">
+        <section class="panel receipt-summary">
+          <div>
+            <h2><ListChecks :size="20" /> レシート</h2>
+            <p>条件に該当したレシートの買物全体を表示しているよ。</p>
+          </div>
+          <div class="receipt-summary-totals">
+            <span v-for="total in receiptPage.filteredReceiptTotals" :key="total.currency">
+              {{ formatReceiptAmount(total.amount, total.currency) }}
+            </span>
+          </div>
+        </section>
+
+        <p v-if="receiptPage.items.length === 0" class="panel empty-state">該当するレシートはないよ。</p>
+
+        <article v-for="receipt in receiptPage.items" :key="receipt.id" class="panel receipt-card">
+          <header class="receipt-card-head">
+            <div class="receipt-title-edit">
+              <input v-model="receipt.displayName" aria-label="レシート名" placeholder="レシート" />
+              <button class="small" @click="saveReceiptName(receipt)">名前を保存</button>
+            </div>
+            <div class="receipt-meta">
+              <span>{{ receipt.fromDate === receipt.toDate ? receipt.fromDate : `${receipt.fromDate}〜${receipt.toDate}` }}</span>
+              <span>{{ receipt.entryCount }}件</span>
+              <strong v-for="total in receipt.totals" :key="total.currency">
+                {{ formatReceiptAmount(total.amount, total.currency) }}
+              </strong>
+            </div>
+          </header>
+          <div class="receipt-entry-list">
+            <div v-for="entry in receipt.entries" :key="entry.id" class="receipt-entry-row">
+              <span class="receipt-entry-target">{{ entry.target || "用途なし" }}</span>
+              <span>{{ entry.category?.name ?? "未分類" }}</span>
+              <span class="receipt-entry-tags">{{ entry.tags.map((tag) => tag.name).join("・") }}</span>
+              <strong>{{ formatReceiptAmount(entry.amount, entry.currency) }}</strong>
+            </div>
+          </div>
+          <footer class="receipt-card-actions">
+            <button class="danger small" @click="ungroupReceipt(receipt)">まとまりを解除</button>
+          </footer>
+        </article>
+
+        <nav v-if="receiptPage.totalPages > 1" class="receipt-pagination" aria-label="レシートのページ">
+          <button :disabled="receiptPage.page <= 1" @click="changeReceiptPage(receiptPage.page - 1)">前へ</button>
+          <span>{{ receiptPage.page }} / {{ receiptPage.totalPages }}</span>
+          <button :disabled="receiptPage.page >= receiptPage.totalPages" @click="changeReceiptPage(receiptPage.page + 1)">次へ</button>
+        </nav>
       </section>
 
       <section v-if="activeTab === 'source-items'" class="panel list-panel">

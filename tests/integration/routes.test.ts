@@ -88,6 +88,70 @@ describe("routes", () => {
     expect(await after.json()).toMatchObject([{ categoryId: category.id, categoryName: "食費", amount: 1200, entryCount: 1 }]);
   });
 
+  it("creates, filters, paginates, renames, and ungroups receipts", async () => {
+    const { app, env } = createTestApp();
+    const fixture = await accessFixture();
+    const webEnv = { ...env, ...fixture.env };
+    const headers = { ...await fixture.headers(), "Content-Type": "application/json" };
+    const categoryResponse = await app.request("https://app.example.test/api/categories", {
+      method: "POST", headers, body: JSON.stringify({ code: "bakery", name: "パン", kind: "expense" })
+    }, webEnv);
+    const category = await categoryResponse.json() as { id: string };
+    const entryIds: string[] = [];
+    for (const [target, amount] of [["食パン", 300], ["菓子パン", 200]] as const) {
+      const response = await app.request("https://app.example.test/api/entries", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          entryType: "expense",
+          entryDate: "2026-10-28",
+          amount,
+          subjectUserId: "usr_access_test-user",
+          categoryId: category.id,
+          tagIds: [],
+          target
+        })
+      }, webEnv);
+      expect(response.status).toBe(201);
+      entryIds.push(((await response.json()) as { id: string }).id);
+    }
+    const created = await app.request("https://app.example.test/api/receipts", {
+      method: "POST", headers, body: JSON.stringify({ entryIds, displayName: "パン屋" })
+    }, webEnv);
+    expect(created.status).toBe(201);
+    const receipt = await created.json() as { id: string };
+
+    const listed = await app.request(`https://app.example.test/api/receipts?categoryIds=${category.id}&page=1&pageSize=1`, { headers }, webEnv);
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toMatchObject({
+      page: 1,
+      pageSize: 1,
+      totalItems: 1,
+      totalPages: 1,
+      filteredReceiptTotals: [{ currency: "JPY", amount: 500 }],
+      items: [{ id: receipt.id, displayName: "パン屋", entryCount: 2 }]
+    });
+    expect((await app.request(`https://app.example.test/api/receipts/${receipt.id}`, {
+      method: "PATCH", headers, body: JSON.stringify({ displayName: "駅前パン屋" })
+    }, webEnv)).status).toBe(200);
+    expect((await app.request(`https://app.example.test/api/receipts/${receipt.id}`, { method: "DELETE", headers }, webEnv)).status).toBe(200);
+    const entries = await app.request("https://app.example.test/api/entries?from=2026-10-28&to=2026-10-28", { headers }, webEnv);
+    expect(await entries.json()).toMatchObject({ items: [{ receiptId: null }, { receiptId: null }] });
+  });
+
+  it("validates receipt paging and duplicate member IDs at the HTTP boundary", async () => {
+    const { app, env } = createTestApp();
+    const fixture = await accessFixture();
+    const webEnv = { ...env, ...fixture.env };
+    const headers = { ...await fixture.headers(), "Content-Type": "application/json" };
+    expect((await app.request("https://app.example.test/api/receipts?page=0", { headers }, webEnv)).status).toBe(400);
+    expect((await app.request("https://app.example.test/api/receipts?page=abc", { headers }, webEnv)).status).toBe(400);
+    const duplicate = await app.request("https://app.example.test/api/receipts", {
+      method: "POST", headers, body: JSON.stringify({ entryIds: ["ent_same", "ent_same"] })
+    }, webEnv);
+    expect(duplicate.status).toBe(400);
+  });
+
   it("requires web authentication for normal API on production hosts", async () => {
     const { app, env } = createTestApp();
     const response = await app.request("https://app.example.test/api/taxonomy", {}, env);
