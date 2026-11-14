@@ -1,6 +1,18 @@
 import { z } from "zod";
 import { entryTypeSchema, sourceTypeSchema } from "./resources";
 
+export const postEntrySourceItemSchema = z.object({
+  entryType: entryTypeSchema,
+  entryDate: z.string(),
+  amount: z.number().int().positive(),
+  currency: z.string().default("JPY"),
+  subjectUserId: z.string(),
+  categoryId: z.string().nullable().optional(),
+  tagIds: z.array(z.string()).default([]),
+  target: z.string().nullable().optional(),
+  memo: z.string().nullable().optional()
+});
+
 export const entrySourceSchema = z.object({
   sourceType: sourceTypeSchema,
   displayName: z.string().nullable().optional(),

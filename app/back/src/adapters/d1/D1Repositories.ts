@@ -445,6 +445,12 @@ class D1EntrySourceItemRepository implements EntrySourceItemRepository {
     await this.db.prepare("DELETE FROM entry_source_items WHERE entry_source_id = ?").bind(entrySourceId).run();
   }
 
+  async deletePending(id: string, expectedUpdatedAt: string): Promise<boolean> {
+    const result = await this.db.prepare("DELETE FROM entry_source_items WHERE id = ? AND status = 'pending' AND updated_at = ?")
+      .bind(id, expectedUpdatedAt).run();
+    return result.meta.changes === 1;
+  }
+
   async countBySourceId(entrySourceId: string): Promise<number> {
     const row = await this.db.prepare("SELECT COUNT(*) AS count FROM entry_source_items WHERE entry_source_id = ?").bind(entrySourceId).first<{ count: number }>();
     return Number(row?.count ?? 0);

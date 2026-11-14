@@ -67,6 +67,7 @@ export interface EntrySourceItemRepository {
   create(item: EntrySourceItem): Promise<EntrySourceItem>;
   update(id: string, patch: Partial<EntrySourceItem>): Promise<EntrySourceItem>;
   updatePending(item: EntrySourceItem, expectedUpdatedAt: string): Promise<EntrySourceItem | null>;
+  deletePending(id: string, expectedUpdatedAt: string): Promise<boolean>;
   delete(id: string): Promise<void>;
   deleteBySourceId(entrySourceId: string): Promise<void>;
   countBySourceId(entrySourceId: string): Promise<number>;

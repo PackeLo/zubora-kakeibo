@@ -49,7 +49,7 @@ describe("Sites household connection", () => {
   it("uses the existing household user for authenticated category, tag, asset and import operations through both MCP servers", async () => {
     const f = await fixture();
     expect((await f.call("server/discover")).result).toMatchObject({ supportedVersions: ["2026-07-28"] });
-    expect((await f.call("tools/list", {}, null)).result?.tools).toHaveLength(23);
+    expect((await f.call("tools/list", {}, null)).result?.tools).toHaveLength(25);
     const category = await f.tool("createCategory", { code: "sites-test", name: "接続テスト", kind: "expense" });
     expect(await f.tool("updateCategory", { id: category.id, name: "接続テスト変更" })).toMatchObject({ name: "接続テスト変更" });
     const tag = await f.tool("createTag", { name: "接続テストタグ" });
@@ -104,7 +104,7 @@ describe("Sites household connection", () => {
     const f = await fixture();
     const now = Math.floor(Date.now() / 1000);
     const client = await f.household.connect(await f.sign({ iat: now + 2, exp: now + 62 }));
-    try { expect((await client.listTools()).tools).toHaveLength(23); }
+    try { expect((await client.listTools()).tools).toHaveLength(25); }
     finally { await client.close(); }
   });
 

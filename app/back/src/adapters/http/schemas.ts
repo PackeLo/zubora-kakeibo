@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { entryTypeSchema } from "../contracts/resources";
-import { sourceItemPatchSchema } from "../contracts/entrySources";
+import { postEntrySourceItemSchema, sourceItemPatchSchema } from "../contracts/entrySources";
+export { postEntrySourceItemSchema } from "../contracts/entrySources";
 export {
   entryTypeSchema, sourceTypeSchema, assetTypeSchema,
   categorySchema, categoryUpdateSchema, tagSchema, tagUpdateSchema,
@@ -8,18 +8,6 @@ export {
 } from "../contracts/resources";
 export { entrySourceSchema } from "../contracts/entrySources";
 export { entryUpdateSchema } from "../contracts/entries";
-
-export const postEntrySourceItemSchema = z.object({
-  entryType: entryTypeSchema,
-  entryDate: z.string(),
-  amount: z.number().int().positive(),
-  currency: z.string().default("JPY"),
-  subjectUserId: z.string(),
-  categoryId: z.string().nullable().optional(),
-  tagIds: z.array(z.string()).default([]),
-  target: z.string().nullable().optional(),
-  memo: z.string().nullable().optional()
-});
 
 export const manualEntrySchema = postEntrySourceItemSchema.extend({
   sourceDisplayName: z.string().nullable().optional()

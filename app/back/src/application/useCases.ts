@@ -318,12 +318,16 @@ export class KakeiboUseCases {
     return this.createEntryFromSourceItem(item, input, actor);
   }
 
-  async deleteEntrySourceItem(id: string) {
+  async deleteEntrySourceItem(id: string, options: { pendingOnly?: boolean } = {}) {
     const item = await this.repos.entrySourceItems.findById(id);
     if (!item) notFound("entry source item not found");
+    if (options.pendingOnly && item.status !== "pending") throw new AppError("CONFLICT", "確認待ちの下書きだけ削除できるよ。");
     await this.assertDateWritable(item.entryDate);
+    if (options.pendingOnly && !await this.repos.entrySourceItems.deletePending(id, item.updatedAt)) {
+      throw new AppError("CONFLICT", "明細が変更または確定されたよ。再取得して確認してね。");
+    }
     await this.repos.duplicates.deleteByEntrySourceItemId(id);
-    await this.repos.entrySourceItems.delete(id);
+    if (!options.pendingOnly) await this.repos.entrySourceItems.delete(id);
     const count = await this.repos.entrySourceItems.countBySourceId(item.entrySourceId);
     if (count === 0) {
       await this.repos.entrySources.delete(item.entrySourceId);

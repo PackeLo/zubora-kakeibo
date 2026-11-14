@@ -242,6 +242,12 @@ class MemoryEntrySourceItemRepository implements EntrySourceItemRepository {
     return item;
   }
 
+  async deletePending(id: string, expectedUpdatedAt: string): Promise<boolean> {
+    const item = this.rows.get(id);
+    if (!item || item.status !== "pending" || item.updatedAt !== expectedUpdatedAt) return false;
+    return this.rows.delete(id);
+  }
+
   async countBySourceId(entrySourceId: string): Promise<number> {
     return [...this.rows.values()].filter((item) => item.entrySourceId === entrySourceId).length;
   }

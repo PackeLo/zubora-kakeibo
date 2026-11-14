@@ -13,7 +13,7 @@ import {
 } from "../contracts/resources";
 import {
   entrySourceSchema, entrySourceResultSchema, sourceItemFiltersSchema,
-  sourceItemPatchSchema, sourceItemResultSchema, sourceItemResult
+  sourceItemPatchSchema, sourceItemResultSchema, sourceItemResult, postEntrySourceItemSchema
 } from "../contracts/entrySources";
 import { summaryFiltersSchema, insightEntriesSchema } from "../contracts/insights";
 import { entryUpdateSchema, ledgerEntryResultSchema } from "../contracts/entries";
@@ -37,7 +37,7 @@ const entryResultSchema = z.object({
   amount: z.number(), currency: z.string()
 }).passthrough();
 
-export const serverInstructions = "家族の家計簿。確定済み明細はgetInsightEntriesで探し、getEntryで最新値とrevisionを取得し、updateEntryにexpectedRevisionと変更項目だけを渡して編集する。確定済み編集に信頼度の制限はない。競合時は再取得して他の変更を確認し、上書きしない。元明細は取り込み・確定時の記録であり、現在の台帳はgetEntryで確認する。分類前にgetTaxonomy、対象者を指定する前にlistUsersを呼ぶ。日付・金額・対象者が不明なら推測せず質問する。createEntrySourceは確認待ちの下書きを作る。listEntrySourceItemsとgetEntrySourceItemで既存明細を取得し、updateEntrySourceItemで分類・タグ等を修正できる。tagsは登録済みタグ名の配列で、空配列は全解除、省略は維持。カテゴリはcategoryIdGuessに実際のIDを指定する。信頼度95%超で必要項目が揃う明細はpostEntrySourceItemで自動確定してよい。95%ちょうど以下・不明は管理画面の登録元明細で人間が確認して確定する。重複・必須不足などで確定が拒否されたら確認待ちに残し理由を伝える。信頼度を正答率の保証と説明しない。変更前に対象と内容を確認するが、95%超の確定で毎回ユーザーの承認を要求しない。削除はIDと名前を提示して明示的な同意を得る。使用中のカテゴリ・タグと金融資産の削除は無効化になる。成功応答のIDと結果を確認して案内し、下書きを確定済みと説明しない。同じ取り込みの再送には同じidempotencyKeyを使う。";
+export const serverInstructions = "家族の家計簿。確定済み明細はgetInsightEntriesで探し、getEntryで最新値とrevisionを取得し、updateEntryにexpectedRevisionと変更項目だけを渡して編集する。確定済み編集に信頼度の制限はない。競合時は再取得して他の変更を確認し、上書きしない。元明細は取り込み・確定時の記録であり、現在の台帳はgetEntryで確認する。分類前にgetTaxonomy、対象者を指定する前にlistUsersを呼ぶ。日付・金額・対象者が不明なら推測せず質問する。createEntrySourceは確認待ちの下書きを作る。listEntrySourceItemsとgetEntrySourceItemで既存明細を取得し、updateEntrySourceItemで分類・タグ等を修正できる。tagsは登録済みタグ名の配列で、空配列は全解除、省略は維持。カテゴリはcategoryIdGuessに実際のIDを指定する。信頼度95%超で必要項目が揃う明細はpostEntrySourceItemで自動確定してよい。95%ちょうど以下・不明でも、レシート・メール・明細などの証跡で裏取りできた内容はconfirmEntrySourceItemへ全項目を明示して確定してよい。裏取りできない明細は確認待ちに残して理由を報告する。信頼度は変更できず、上げて制限を回避しない。必須不足・分類不備や未確認の重複候補などで確定できなければ確認待ちに残し理由を伝える。信頼度を正答率の保証と説明しない。変更前に対象と内容を確認するが、95%超の確定で毎回ユーザーの承認を要求しない。重複・誤取り込みなど不要が明確なpendingの下書きはdeleteEntrySourceItemで都度承認なしに削除してよい。削除したIDと対象を報告する。確定済みの元明細は削除できない。カテゴリ・タグ・金融資産の削除はIDと名前を提示して明示的な同意を得る。使用中のカテゴリ・タグと金融資産の削除は無効化になる。成功応答のIDと結果を確認して案内し、下書きを確定済みと説明しない。同じ取り込みの再送には同じidempotencyKeyを使う。";
 
 export function createToolServer(useCases: KakeiboUseCases, actor: Actor, scopes: readonly string[], resource: string) {
   const server = new McpServer({ name: "zubora-kakeibo", version: "0.2.0" }, { instructions: serverInstructions });
@@ -109,10 +109,25 @@ export function createToolServer(useCases: KakeiboUseCases, actor: Actor, scopes
     inputSchema: sourceItemPatchSchema.extend({ id: z.string().min(1) }), outputSchema: sourceItemResultSchema
   }, ({ id, ...patch }) => invoke(drafts, async () => sourceItemResult(await useCases.updateEntrySourceItem(id, patch))));
 
+  server.registerTool("deleteEntrySourceItem", {
+    ...config("確認待ち（pending）の下書きだけを削除する。重複・誤取り込みなど不要が明確な明細は都度承認なしで削除してよい。削除したIDと対象を報告する。確定済みの元明細は削除できない。", drafts, true),
+    inputSchema: idSchema, outputSchema: z.object({ deletedSource: z.boolean() })
+  }, ({ id }) => invoke(drafts, () => useCases.deleteEntrySourceItem(id, { pendingOnly: true })));
+
   server.registerTool("postEntrySourceItem", {
-    ...config("保存済みの確認待ち明細を検証して確定し、集計へ反映する。信頼度95%超・必須項目と分類が有効・重複候補なしの場合だけ実行できる。成功した同じIDの再送は元の確定結果を返す。低信頼度は管理画面で確認する。", posting),
+    ...config("保存済みの確認待ち明細を検証して確定し、集計へ反映する。信頼度95%超・必須項目と分類が有効・重複候補なしの場合だけ実行できる。成功した同じIDの再送は元の確定結果を返す。低信頼度は証跡で裏取りしてconfirmEntrySourceItemを使う。", posting),
     inputSchema: idSchema, outputSchema: entryResultSchema
   }, ({ id }) => invoke(posting, () => useCases.postHighConfidenceSourceItem(id, actor)));
+
+  server.registerTool("confirmEntrySourceItem", {
+    ...config("証跡（レシート・メール・明細）で内容を裏取りした確認待ち明細を、信頼度に関係なく明示確定する。保存済みの推定値を盲目的に使わず、確認した全項目を指定する。categoryIdはカテゴリID、tagIdsはタグIDの配列。カテゴリ・用途・メモがない場合はnull、タグなしは空配列を明示する。信頼度は変更できない。成功後の再送は競合になるため現在のステータスを確認する。", posting),
+    inputSchema: postEntrySourceItemSchema.extend({
+      id: z.string().min(1),
+      currency: postEntrySourceItemSchema.shape.currency.removeDefault(),
+      tagIds: postEntrySourceItemSchema.shape.tagIds.removeDefault()
+    }).required().strict(),
+    outputSchema: ledgerEntryResultSchema
+  }, ({ id, ...input }) => invoke(posting, () => useCases.postEntrySourceItem(id, input, actor)));
 
   server.registerTool("getEntry", {
     ...config("確定済みの家計簿明細をIDで取得する。現在値・分類・タグ・revisionを確認してから編集する。元明細の候補値は台帳の現在値とは異なる場合がある。", read),
