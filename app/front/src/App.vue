@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   Archive,
@@ -679,16 +679,13 @@ function selectYear(value: string) {
 
 function shiftPeriod(step: number) { replacePeriod(movePeriod(dashboardPeriod.value, step)); }
 
+// 内訳へのスクロールは router の scrollBehavior に任せる（ここで scrollIntoView すると競合する）。
 async function selectCategory(id: string | null, _name: string) {
   await router.push({ name: "dashboard-category", params: { categoryId: id ?? "uncategorized" }, query: { ...route.query, ...periodQuery(dashboardPeriod.value) } });
-  await nextTick();
-  document.querySelector(".dashboard-entries")?.scrollIntoView?.({ block: "start" });
 }
 
 async function selectDay(date: string) {
   await router.push({ name: "dashboard-day", params: { date }, query: { ...route.query, ...periodQuery(dashboardPeriod.value) } });
-  await nextTick();
-  document.querySelector(".dashboard-entries")?.scrollIntoView?.({ block: "start" });
 }
 
 function closeDashboardDrilldown() {

@@ -24,8 +24,13 @@ export function createAppRouter(history: RouterHistory = createWebHistory()): Ro
       { path: "/:pathMatch(.*)*", name: "not-found", component: AppShell }
     ],
     // 戻る時は元のスクロール位置を復元し、進む時は先頭へ。
-    scrollBehavior(_to, _from, savedPosition) {
-      return savedPosition ?? { top: 0 };
+    // ただしカテゴリ・日別の内訳へ進む時は、内訳セクションへ寄せる。スクロール制御は
+    // ここに一本化する（コンポーネント側の scrollIntoView と競合すると、先頭への
+    // スクロールが勝って「1回目は頭に飛ぶ」不具合になるため）。
+    scrollBehavior(to, _from, savedPosition) {
+      if (savedPosition) return savedPosition;
+      if (to.name === "dashboard-category" || to.name === "dashboard-day") return { el: ".dashboard-entries" };
+      return { top: 0 };
     }
   });
   initNavTracker(router);

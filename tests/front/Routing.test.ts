@@ -160,6 +160,18 @@ describe("routing navigation", () => {
     wrapper.unmount();
   });
 
+  it("scroll behavior targets the drilldown section for category/day routes only", () => {
+    const router = createAppRouter(createMemoryHistory());
+    const scroll = router.options.scrollBehavior!;
+    const at = (name: string) => ({ name } as any);
+    // 内訳へ進む時はセクションへ寄せる（先頭へ戻すと「1回目は頭に飛ぶ」不具合になる）。
+    expect(scroll(at("dashboard-category"), at("dashboard"), null)).toEqual({ el: ".dashboard-entries" });
+    expect(scroll(at("dashboard-day"), at("dashboard"), null)).toEqual({ el: ".dashboard-entries" });
+    expect(scroll(at("dashboard"), at("dashboard-category"), null)).toEqual({ top: 0 });
+    // 戻る時は保存位置の復元が最優先。
+    expect(scroll(at("dashboard-category"), at("dashboard"), { left: 0, top: 123 })).toEqual({ left: 0, top: 123 });
+  });
+
   it("invalid month query is normalized without crashing", async () => {
     const { wrapper, router } = await mountAt("/dashboard?month=2024-13");
     await flushPromises();
