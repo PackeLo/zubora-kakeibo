@@ -1,6 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
+import { createMemoryHistory } from "vue-router";
 import App from "../../app/front/src/App.vue";
+import { createAppRouter } from "../../app/front/src/router";
+
+async function mountApp(path = "/dashboard") {
+  const router = createAppRouter(createMemoryHistory());
+  await router.push(path);
+  const wrapper = mount(App, { global: { plugins: [router] } });
+  await flushPromises();
+  return wrapper;
+}
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -24,8 +34,7 @@ describe("signed-in user initialization", () => {
       return Response.json({ items: [] });
     });
     vi.stubGlobal("fetch", fetchMock);
-    const wrapper = mount(App);
-    await flushPromises();
+    const wrapper = await mountApp();
     await wrapper.findAll("nav button").find((button) => button.text() === "支出・収入")!.trigger("click");
     await flushPromises();
     await wrapper.get('[aria-label="明細を編集"]').trigger("click");
@@ -55,12 +64,13 @@ describe("signed-in user initialization", () => {
       return Response.json({ items: [] });
     });
     vi.stubGlobal("fetch", fetchMock);
-    const wrapper = mount(App);
-    await flushPromises();
+    const wrapper = await mountApp();
     await wrapper.findAll("nav button").find((button) => button.text() === "支出・収入")!.trigger("click");
+    await flushPromises();
     expect(wrapper.get('[name="manualSubjectUserId"]').element).toHaveProperty("value", me.id);
     expect(wrapper.get('[name="manualSubjectUserId"]').text()).toContain(me.displayName);
     await wrapper.findAll("nav button").find((button) => button.text() === "金融資産")!.trigger("click");
+    await flushPromises();
     expect(wrapper.get('[name="assetOwnerUserId"]').element).toHaveProperty("value", me.id);
     expect(wrapper.get('[name="assetOwnerUserId"]').text()).toContain(me.displayName);
     wrapper.unmount();
@@ -96,9 +106,9 @@ describe("signed-in user initialization", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("confirm", vi.fn(() => true));
-    const wrapper = mount(App);
-    await flushPromises();
+    const wrapper = await mountApp();
     await wrapper.findAll("nav button").find((button) => button.text() === "レシート")!.trigger("click");
+    await flushPromises();
     expect(wrapper.text()).toContain("支出レシート");
     expect(wrapper.get<HTMLInputElement>('input[aria-label="レシート名"]').element.value).toBe("まちのパン屋");
     expect(wrapper.text()).toContain("食パン");
@@ -131,8 +141,7 @@ describe("signed-in user initialization", () => {
       return Response.json({ items: [] });
     });
     vi.stubGlobal("fetch", fetchMock);
-    const wrapper = mount(App);
-    await flushPromises();
+    const wrapper = await mountApp();
     await wrapper.findAll("nav button").find((button) => button.text() === "支出・収入")!.trigger("click");
     await flushPromises();
     const checkboxes = wrapper.findAll<HTMLInputElement>('input[type="checkbox"].row-checkbox');

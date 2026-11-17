@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import {
   Archive,
   BarChart3,
@@ -39,10 +40,49 @@ import EntryList from "./components/EntryList.vue";
 import PersonName from "./components/PersonName.vue";
 import { assetTypeNames, formatMoney } from "./utils/display";
 import { movePeriod, periodRange, type DashboardPeriod } from "./utils/period";
+import { entryEditorBusy, hasInAppPrevious, previousNavEntry } from "./navigation";
 
 type Tab = "dashboard" | "entries" | "receipts" | "source-items" | "duplicates" | "assets" | "taxonomy" | "archives";
 
-const activeTab = ref<Tab>("dashboard");
+// URLを画面状態の唯一の正本にする（routeから導出し、UIイベントではrouterだけを操作する）。
+const route = useRoute();
+const router = useRouter();
+const routeName = computed(() => (typeof route.name === "string" ? route.name : ""));
+const isNotFound = computed(() => routeName.value === "not-found");
+const TAB_BY_ROUTE: Record<string, Tab> = {
+  dashboard: "dashboard",
+  "dashboard-category": "dashboard",
+  "dashboard-day": "dashboard",
+  entries: "entries",
+  "entry-details": "entries",
+  "entry-edit": "entries",
+  receipts: "receipts",
+  "source-items": "source-items",
+  duplicates: "duplicates",
+  assets: "assets",
+  taxonomy: "taxonomy",
+  archives: "archives"
+};
+const activeTab = computed<Tab>(() => TAB_BY_ROUTE[routeName.value] ?? "dashboard");
+const isEntryDetails = computed(() => routeName.value === "entry-details");
+const isEntryEdit = computed(() => routeName.value === "entry-edit");
+
+function queryString(key: string): string | undefined {
+  const value = route.query[key];
+  return typeof value === "string" ? value : undefined;
+}
+function queryWithout(...keys: string[]): Record<string, string> {
+  const query: Record<string, string> = {};
+  for (const [key, value] of Object.entries(route.query)) {
+    if (!keys.includes(key) && typeof value === "string") query[key] = value;
+  }
+  return query;
+}
+function isValidDateString(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
 const pendingOperations = ref(0);
 const loading = computed(() => pendingOperations.value > 0);
 const notice = ref("");
@@ -60,7 +100,13 @@ const entries = ref<Entry[]>([]);
 const receiptPage = ref<ReceiptPage>({ items: [], page: 1, pageSize: 20, totalItems: 0, totalPages: 0, filteredReceiptTotals: [] });
 const selectedEntryIds = ref<string[]>([]);
 const receiptDisplayName = ref("");
-const receiptPageNumber = ref(1);
+// レシートのページはクエリが正本（不正値は1に倒す）。
+const receiptPageNumber = computed(() => {
+  const raw = queryString("page");
+  if (!raw) return 1;
+  const page = Number(raw);
+  return Number.isInteger(page) && page >= 1 ? page : 1;
+});
 const sourceItems = ref<EntrySourceItem[]>([]);
 const daily = ref<DailySummary[]>([]);
 const monthly = ref<Array<{ month: string; incomeTotal: number; expenseTotal: number; netCashflow: number }>>([]);
@@ -71,7 +117,18 @@ const duplicateMap = reactive<Record<string, any[]>>({});
 
 const today = new Date().toISOString().slice(0, 10);
 const monthStart = `${today.slice(0, 7)}-01`;
-const dashboardPeriod = ref<DashboardPeriod>({ mode: "month", month: today.slice(0, 7) });
+// ダッシュボードの期間はクエリが正本（不正値は既定値に倒す）。
+const dashboardPeriod = computed<DashboardPeriod>(() => {
+  if (queryString("mode") === "year") {
+    const year = Number(queryString("year"));
+    return { mode: "year", year: Number.isInteger(year) && year >= 1000 && year <= 9999 ? year : new Date().getFullYear() };
+  }
+  const month = queryString("month");
+  return { mode: "month", month: month && /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? month : today.slice(0, 7) };
+});
+function periodQuery(period: DashboardPeriod): Record<string, string> {
+  return period.mode === "year" ? { mode: "year", year: String(period.year) } : { month: period.month };
+}
 const filters = reactive({
   type: "all" as "all" | "expense" | "income",
   from: monthStart,
@@ -84,14 +141,58 @@ const filters = reactive({
   registeredByEmails: [] as string[]
 });
 
-type EntryView = { mode: "list" } | { mode: "details"; entry: Entry; origin: "dashboard" | "entries" }
-  | { mode: "edit"; entry: Entry; origin: "dashboard" | "entries"; fromDetails: boolean };
-const entryView = ref<EntryView>({ mode: "list" });
-const entryContext = computed(() => entryView.value.mode !== "list" && entryView.value.origin === activeTab.value ? entryView.value : null);
-const editingEntry = computed(() => entryContext.value?.mode === "edit" ? entryContext.value.entry : null);
-const entryEditorBusy = ref(false);
 type DashboardSelection = { kind: "category"; id: string | null; name: string } | { kind: "day"; date: string; name: string };
-const dashboardCategory = ref<DashboardSelection | null>(null);
+// ダッシュボードの絞り込みはパス（カテゴリ/日付）から導出する。
+const dashboardCategory = computed<DashboardSelection | null>(() => {
+  if (routeName.value === "dashboard-category") {
+    const param = String(route.params.categoryId ?? "");
+    const id = param === "uncategorized" ? null : param;
+    const name = allCategories.value.find((category) => category.id === id)?.name
+      ?? categorySummary.value.find((item) => item.categoryId === id)?.categoryName
+      ?? (id === null ? "未分類" : id);
+    return { kind: "category", id, name };
+  }
+  if (routeName.value === "dashboard-day") {
+    const date = String(route.params.date ?? "");
+    if (!isValidDateString(date)) return null;
+    return { kind: "day", date, name: new Intl.DateTimeFormat("ja-JP", { month: "long", day: "numeric", timeZone: "UTC" }).format(new Date(`${date}T00:00:00Z`)) };
+  }
+  return null;
+});
+const invalidDashboardDay = computed(() => routeName.value === "dashboard-day" && !isValidDateString(String(route.params.date ?? "")));
+
+// 詳細・編集はパスのIDからAPIで読み込む。
+const routedEntryId = computed(() => (isEntryDetails.value || isEntryEdit.value ? String(route.params.id ?? "") : null));
+const routedEntry = ref<Entry | null>(null);
+const routedEntryError = ref("");
+let routedEntryGeneration = 0;
+async function loadRoutedEntry(id: string) {
+  const generation = ++routedEntryGeneration;
+  routedEntryError.value = "";
+  if (routedEntry.value?.id === id) return;
+  routedEntry.value = null;
+  try {
+    const entry = await apiGet<Entry>(`/api/entries/${id}`);
+    if (generation !== routedEntryGeneration) return;
+    routedEntry.value = entry;
+  } catch {
+    if (generation !== routedEntryGeneration) return;
+    routedEntry.value = null;
+    routedEntryError.value = "明細が見つからなかったよ。";
+  }
+}
+watch(routedEntryId, (id) => {
+  if (id) void loadRoutedEntry(id);
+  else {
+    routedEntryGeneration += 1;
+    routedEntry.value = null;
+    routedEntryError.value = "";
+  }
+}, { immediate: true });
+const editingEntry = computed(() => (isEntryEdit.value ? routedEntry.value : null));
+function setEntryEditorBusy(value: boolean) {
+  entryEditorBusy.value = value;
+}
 
 const categoryForm = reactive({
   id: "",
@@ -197,6 +298,37 @@ const calendarOffset = computed(() => new Date(`${currentRange.value.from}T00:00
 
 onMounted(() => {
   void refreshAll();
+  void normalizeRouteQuery();
+});
+
+// 期間・タブ・レシートページがURL経由で変わったら読み直す（期間は値で比較し、同じ値の遷移では再読み込みしない）。
+watch([activeTab, () => (dashboardPeriod.value.mode === "year" ? `year:${dashboardPeriod.value.year}` : `month:${dashboardPeriod.value.month}`), receiptPageNumber], () => {
+  void refreshAll();
+});
+
+// 不正なクエリは安全な値へ replace で正規化する（画面は落とさない）。
+async function normalizeRouteQuery() {
+  if (routeName.value.startsWith("dashboard")) {
+    const mode = queryString("mode");
+    const month = queryString("month");
+    const year = queryString("year");
+    if (mode && mode !== "month" && mode !== "year") {
+      void router.replace({ query: queryWithout("mode") });
+    } else if (mode === "year" && year && !/^\d{4}$/.test(year)) {
+      void router.replace({ query: { ...queryWithout("year"), year: String(new Date().getFullYear()) } });
+    } else if (mode !== "year" && month && !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+      void router.replace({ query: queryWithout("month") });
+    }
+  }
+  if (routeName.value === "receipts") {
+    const page = queryString("page");
+    if (page && !(/^\d+$/.test(page) && Number(page) >= 1)) {
+      await router.replace({ query: queryWithout("page") });
+    }
+  }
+}
+watch(() => route.fullPath, () => {
+  void normalizeRouteQuery();
 });
 
 let refreshGeneration = 0;
@@ -249,31 +381,46 @@ async function refreshAll() {
 }
 
 async function editEntry(id: string) {
-  if (loading.value || entryEditorBusy.value) return;
-  await run(async () => {
-    const fromDetails = entryContext.value?.mode === "details";
-    entryView.value = { mode: "edit", entry: await apiGet<Entry>(`/api/entries/${id}`), origin: activeTab.value === "dashboard" ? "dashboard" : "entries", fromDetails };
-  });
+  if (entryEditorBusy.value) return;
+  await router.push({ name: "entry-edit", params: { id } });
 }
 
 async function viewEntry(id: string) {
-  if (loading.value || entryEditorBusy.value) return;
-  await run(async () => {
-    entryView.value = { mode: "details", entry: await apiGet<Entry>(`/api/entries/${id}`), origin: activeTab.value === "dashboard" ? "dashboard" : "entries" };
-  });
+  if (entryEditorBusy.value) return;
+  await router.push({ name: "entry-details", params: { id } });
+}
+
+// 直接着地時はアプリ内履歴がないため親一覧へ進む（OS戻るでアプリが閉じるのはブラウザの制限で保証対象外）。
+function backFromDetails() {
+  if (hasInAppPrevious(router)) void router.back();
+  else void router.push({ name: "entries" });
+}
+
+// 編集の保存・キャンセル後: アプリ内から来た場合は back() で戻り（詳細が重複しない）、直接着地時は詳細へ replace する。
+function finishEditNavigation(saved?: Entry) {
+  if (hasInAppPrevious(router) && previousNavEntry(router)) {
+    void router.back();
+    return;
+  }
+  const id = saved?.id ?? routedEntryId.value;
+  if (id) void router.replace({ name: "entry-details", params: { id } });
+  else void router.replace({ name: "entries" });
 }
 
 function cancelEntryEdit() {
-  const view = entryView.value;
-  entryView.value = view.mode === "edit" && view.fromDetails ? { mode: "details", entry: view.entry, origin: view.origin } : { mode: "list" };
+  if (!isEntryEdit.value) return;
+  entryEditorBusy.value = false;
+  finishEditNavigation();
 }
 
 async function entrySaved(saved: Entry) {
-  const edited = editingEntry.value !== null;
-  const view = entryView.value;
-  entryView.value = view.mode === "edit" && view.fromDetails ? { mode: "details", entry: saved, origin: view.origin } : { mode: "list" };
+  const wasRoutedEdit = isEntryEdit.value;
+  if (wasRoutedEdit) routedEntry.value = saved;
+  // 保存は完了しているので、遷移ガードを解除してから戻る。
+  entryEditorBusy.value = false;
   await refreshAll();
-  notice.value = edited ? "明細の変更を保存した。" : "登録した。";
+  notice.value = wasRoutedEdit ? "明細の変更を保存した。" : "登録した。";
+  if (wasRoutedEdit) finishEditNavigation(saved);
 }
 
 async function deleteEntry(id: string) {
@@ -291,7 +438,6 @@ async function createReceipt() {
     });
     selectedEntryIds.value = [];
     receiptDisplayName.value = "";
-    receiptPageNumber.value = 1;
     await refreshAll();
     notice.value = "選んだ明細をレシートにまとめた。";
   });
@@ -314,15 +460,21 @@ async function ungroupReceipt(receipt: Receipt) {
   });
 }
 
+// ページ送りは画面遷移ではないので replace でクエリだけを変える。
 async function changeReceiptPage(page: number) {
   if (page < 1 || (receiptPage.value.totalPages > 0 && page > receiptPage.value.totalPages)) return;
-  receiptPageNumber.value = page;
+  const query = queryWithout("page");
+  if (page > 1) query.page = String(page);
+  await router.replace({ query });
   await refreshAll();
 }
 
+// 絞り込みが変わったらレシートは1ページ目へ戻す。
 async function refreshFromFilters() {
-  receiptPageNumber.value = 1;
   selectedEntryIds.value = [];
+  if (routeName.value === "receipts" && receiptPageNumber.value !== 1) {
+    await router.replace({ query: queryWithout("page") });
+  }
   await refreshAll();
 }
 
@@ -500,46 +652,65 @@ function clearExclusions() {
   void refreshFromFilters();
 }
 
+// 期間変更は画面遷移ではないので replace でクエリだけを変える。
+function replacePeriod(period: DashboardPeriod) {
+  const query = { ...queryWithout("mode", "month", "year"), ...periodQuery(period) };
+  void router.replace({ query });
+  void refreshAll();
+}
+
 function setPeriodMode(mode: "month" | "year") {
   const period = dashboardPeriod.value;
   if (period.mode === mode) return;
   const year = period.mode === "year" ? period.year : Number(period.month.slice(0, 4));
-  dashboardPeriod.value = mode === "year" ? { mode, year } : { mode, month: `${year}-01` };
-  void refreshAll();
+  replacePeriod(mode === "year" ? { mode, year } : { mode, month: `${year}-01` });
 }
 
 function selectMonth(month: string) {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return;
-  dashboardPeriod.value = { mode: "month", month };
-  void refreshAll();
+  replacePeriod({ mode: "month", month });
 }
 
 function selectYear(value: string) {
   const year = Number(value);
   if (!Number.isInteger(year) || year < 1000 || year > 9999) return;
-  dashboardPeriod.value = { mode: "year", year };
-  void refreshAll();
+  replacePeriod({ mode: "year", year });
 }
 
-function shiftPeriod(step: number) { dashboardPeriod.value = movePeriod(dashboardPeriod.value, step); void refreshAll(); }
+function shiftPeriod(step: number) { replacePeriod(movePeriod(dashboardPeriod.value, step)); }
 
-async function selectCategory(id: string | null, name: string) {
-  dashboardCategory.value = { kind: "category", id, name };
+async function selectCategory(id: string | null, _name: string) {
+  await router.push({ name: "dashboard-category", params: { categoryId: id ?? "uncategorized" }, query: { ...route.query, ...periodQuery(dashboardPeriod.value) } });
   await nextTick();
   document.querySelector(".dashboard-entries")?.scrollIntoView?.({ block: "start" });
 }
 
 async function selectDay(date: string) {
-  dashboardCategory.value = { kind: "day", date, name: new Intl.DateTimeFormat("ja-JP", { month: "long", day: "numeric", timeZone: "UTC" }).format(new Date(`${date}T00:00:00Z`)) };
+  await router.push({ name: "dashboard-day", params: { date }, query: { ...route.query, ...periodQuery(dashboardPeriod.value) } });
   await nextTick();
   document.querySelector(".dashboard-entries")?.scrollIntoView?.({ block: "start" });
 }
 
+function closeDashboardDrilldown() {
+  if (hasInAppPrevious(router) && previousNavEntry(router)?.name === "dashboard") void router.back();
+  else void router.push({ name: "dashboard", query: periodQuery(dashboardPeriod.value) });
+}
+
+const TAB_ROUTE: Record<Tab, string> = {
+  dashboard: "dashboard",
+  entries: "entries",
+  receipts: "receipts",
+  "source-items": "source-items",
+  duplicates: "duplicates",
+  assets: "assets",
+  taxonomy: "taxonomy",
+  archives: "archives"
+};
+
 function changeTab(tab: Tab) {
   if (entryEditorBusy.value) return;
-  entryView.value = { mode: "list" };
-  activeTab.value = tab;
-  if (tab === "dashboard" || tab === "entries" || tab === "receipts") void refreshAll();
+  const query = tab === "dashboard" ? periodQuery(dashboardPeriod.value) : tab === "receipts" && receiptPageNumber.value > 1 ? { page: String(receiptPageNumber.value) } : {};
+  void router.push({ name: TAB_ROUTE[tab], query });
 }
 
 async function run(task: () => Promise<void>) {
@@ -615,12 +786,27 @@ async function run(task: () => Promise<void>) {
       <p v-if="error" class="error">{{ error }}</p>
       <p v-if="loading" class="loading">読み込み中。</p>
 
-      <EntryDetails v-if="entryContext?.mode === 'details'" :entry="entryContext.entry" :users="users" :busy="loading"
-        @back="entryView = { mode: 'list' }" @edit="editEntry(entryContext!.entry.id)" />
-      <EntryEditor v-if="activeTab === 'dashboard' && entryContext?.mode === 'edit'" :entry="editingEntry" :categories="allCategories" :tags="taxonomy.tags" :users="users"
-        :default-subject-user-id="currentUser?.id ?? ''" :disabled="loading" @saved="entrySaved" @cancel="cancelEntryEdit" @busy="entryEditorBusy = $event" />
+      <section v-if="isNotFound" class="panel" data-testid="not-found">
+        <h2>ページが見つからなかったよ</h2>
+        <p class="muted">URLを確認してね。</p>
+        <button type="button" @click="router.push({ name: 'dashboard' })">ダッシュボードへ</button>
+      </section>
+      <section v-if="(isEntryDetails || isEntryEdit) && routedEntryError" class="panel" data-testid="entry-not-found">
+        <h2>明細を表示できないよ</h2>
+        <p class="error">{{ routedEntryError }}</p>
+        <button type="button" @click="backFromDetails">元の一覧に戻る</button>
+      </section>
+      <section v-if="invalidDashboardDay" class="panel" data-testid="invalid-day">
+        <h2>日付を表示できないよ</h2>
+        <p class="muted">URLの日付を確認してね。</p>
+        <button type="button" @click="router.push({ name: 'dashboard', query: periodQuery(dashboardPeriod) })">ダッシュボードへ</button>
+      </section>
+      <EntryDetails v-if="isEntryDetails && routedEntry" :entry="routedEntry" :users="users" :busy="loading"
+        @back="backFromDetails" @edit="editEntry(routedEntry.id)" />
+      <EntryEditor v-if="isEntryEdit && routedEntry" :entry="routedEntry" :categories="allCategories" :tags="taxonomy.tags" :users="users"
+        :default-subject-user-id="currentUser?.id ?? ''" :disabled="loading" @saved="entrySaved" @cancel="cancelEntryEdit" @busy="setEntryEditorBusy" />
 
-      <section v-if="activeTab === 'dashboard' && !entryContext" class="content-grid">
+      <section v-if="activeTab === 'dashboard' && !isNotFound && !invalidDashboardDay" class="content-grid">
         <section class="panel wide period-panel">
           <div class="period-modes" aria-label="ダッシュボードの表示期間"><button type="button" :class="{ active: dashboardPeriod.mode === 'month' }" :disabled="loading" @click="setPeriodMode('month')">月別</button><button type="button" :class="{ active: dashboardPeriod.mode === 'year' }" :disabled="loading" @click="setPeriodMode('year')">年別</button></div>
           <div class="period-navigation"><button type="button" aria-label="前の期間" :disabled="loading" @click="shiftPeriod(-1)">前へ</button>
@@ -690,16 +876,16 @@ async function run(task: () => Promise<void>) {
           </ul>
         </section>
         <section v-if="dashboardCategory" class="panel dashboard-entries wide">
-          <div class="detail-header"><h2>{{ dashboardCategory.name }}の明細</h2><button type="button" @click="dashboardCategory = null">内訳を閉じる</button></div>
+          <div class="detail-header"><h2>{{ dashboardCategory.name }}の明細</h2><button type="button" @click="closeDashboardDrilldown">内訳を閉じる</button></div>
           <p class="muted">{{ currentRange.from }}〜{{ currentRange.to }}</p>
           <EntryList :entries="dashboardEntries" :busy="loading || entryEditorBusy" @details="viewEntry" @edit="editEntry" />
         </section>
       </section>
 
-      <section v-if="activeTab === 'entries' && entryContext?.mode !== 'details'" class="split">
-        <EntryEditor :entry="editingEntry" :categories="allCategories" :tags="taxonomy.tags" :users="users"
+      <section v-if="routeName === 'entries'" class="split">
+        <EntryEditor :entry="null" :categories="allCategories" :tags="taxonomy.tags" :users="users"
           :default-subject-user-id="currentUser?.id ?? ''" :disabled="loading"
-          @saved="entrySaved" @cancel="cancelEntryEdit" @busy="entryEditorBusy = $event" />
+          @saved="entrySaved" @cancel="cancelEntryEdit" @busy="setEntryEditorBusy" />
 
         <section class="panel list-panel">
           <h2><ListChecks :size="20" /> 明細</h2>

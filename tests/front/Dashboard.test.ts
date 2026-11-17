@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
+import { createMemoryHistory } from "vue-router";
 import App from "../../app/front/src/App.vue";
+import { createAppRouter } from "../../app/front/src/router";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -33,9 +35,11 @@ async function dashboard(exclusionData = false) {
     return Response.json({ items: [] });
   });
   vi.stubGlobal("fetch", fetchMock);
-  const wrapper = mount(App);
+  const router = createAppRouter(createMemoryHistory());
+  await router.push("/dashboard");
+  const wrapper = mount(App, { global: { plugins: [router] } });
   await flushPromises();
-  return { wrapper, fetchMock, people };
+  return { wrapper, fetchMock, people, router };
 }
 
 describe("mobile dashboard workflow", () => {
@@ -57,9 +61,11 @@ describe("mobile dashboard workflow", () => {
       expect(query.get("excludedTagIds")).toBe("refund");
     }
     await wrapper.get('[aria-label="娯楽の明細を表示"]').trigger("click");
+    await flushPromises();
     await wrapper.get('.dashboard-entries [aria-label="明細の詳細"]').trigger("click");
     await flushPromises();
     await wrapper.findAll("button").find(button => button.text() === "元の一覧に戻る")!.trigger("click");
+    await flushPromises();
     expect((wrapper.get('[name="excludedCategories"][value="advance"]').element as HTMLInputElement).checked).toBe(true);
     await wrapper.findAll("button").find(button => button.text() === "年別")!.trigger("click");
     await flushPromises();
@@ -124,6 +130,7 @@ describe("mobile dashboard workflow", () => {
   it("opens category details, cancels and saves an edit, then returns to the same dashboard drilldown", async () => {
     const { wrapper, fetchMock } = await dashboard();
     await wrapper.get('[aria-label="娯楽の明細を表示"]').trigger("click");
+    await flushPromises();
     expect(wrapper.get(".dashboard-entries").text()).toContain("映画");
     await wrapper.get('.dashboard-entries [aria-label="明細の詳細"]').trigger("click");
     await flushPromises();
@@ -131,6 +138,7 @@ describe("mobile dashboard workflow", () => {
     await wrapper.findAll("button").find(button => button.text() === "この明細を編集")!.trigger("click");
     await flushPromises();
     await wrapper.get('.entry-editor button[type="button"]').trigger("click");
+    await flushPromises();
     expect(wrapper.find(".entry-details").exists()).toBe(true);
     await wrapper.findAll("button").find(button => button.text() === "この明細を編集")!.trigger("click");
     await flushPromises();
@@ -140,6 +148,7 @@ describe("mobile dashboard workflow", () => {
     expect(wrapper.get('[data-testid="entry-memo"]').text()).toBe("更新したメモ");
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1);
     await wrapper.findAll("button").find(button => button.text() === "元の一覧に戻る")!.trigger("click");
+    await flushPromises();
     expect(wrapper.get(".dashboard-entries").text()).toContain("娯楽の明細");
     expect(wrapper.find('[name="dashboardMonth"]').exists()).toBe(true);
     wrapper.unmount();
@@ -150,6 +159,7 @@ describe("mobile dashboard workflow", () => {
     expect(wrapper.find('[data-testid="asset-totals"]').exists()).toBe(false);
     expect(wrapper.text()).not.toContain("資産現在値");
     await wrapper.findAll("nav button").find(button => button.text() === "金融資産")!.trigger("click");
+    await flushPromises();
     const totals = wrapper.get('[data-testid="asset-totals"]');
     expect(totals.text()).toContain("JPY");
     expect(totals.text()).toContain("USD");
@@ -165,6 +175,7 @@ describe("mobile dashboard workflow", () => {
     const month = wrapper.get('[name="dashboardMonth"]').element as HTMLInputElement;
     const selected = month.value;
     await wrapper.get(".calendar-day.filled").trigger("click");
+    await flushPromises();
     expect(wrapper.get(".dashboard-entries").text()).toContain("映画");
     expect((wrapper.get('[name="dashboardMonth"]').element as HTMLInputElement).value).toBe(selected);
     wrapper.unmount();
