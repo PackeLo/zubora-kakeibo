@@ -71,6 +71,9 @@ describe("signed-in user initialization", () => {
     expect(wrapper.get('[name="manualSubjectUserId"]').text()).toContain(me.displayName);
     await wrapper.findAll("nav button").find((button) => button.text() === "金融資産")!.trigger("click");
     await flushPromises();
+    // 資産フォームは専用画面に移ったので、新規登録から開いて所有者の初期値を確認する。
+    await wrapper.findAll("button").find((button) => button.text() === "新規登録")!.trigger("click");
+    await flushPromises();
     expect(wrapper.get('[name="assetOwnerUserId"]').element).toHaveProperty("value", me.id);
     expect(wrapper.get('[name="assetOwnerUserId"]').text()).toContain(me.displayName);
     wrapper.unmount();

@@ -60,7 +60,13 @@ const TAB_BY_ROUTE: Record<string, Tab> = {
   "source-items": "source-items",
   duplicates: "duplicates",
   assets: "assets",
+  "asset-new": "assets",
+  "asset-edit": "assets",
   taxonomy: "taxonomy",
+  "category-new": "taxonomy",
+  "category-edit": "taxonomy",
+  "tag-new": "taxonomy",
+  "tag-edit": "taxonomy",
   archives: "archives"
 };
 const activeTab = computed<Tab>(() => TAB_BY_ROUTE[routeName.value] ?? "dashboard");
@@ -85,6 +91,8 @@ function isValidDateString(value: string): boolean {
 }
 const pendingOperations = ref(0);
 const loading = computed(() => pendingOperations.value > 0);
+// 初回 refreshAll が成功したか（フォーム画面で対象が見つからない判定に使う）。
+const dataLoaded = ref(false);
 const notice = ref("");
 const error = ref("");
 const currentUser = ref<User | null>(null);
@@ -228,6 +236,107 @@ const archiveConfirm = reactive({
   externalStorageNote: ""
 });
 
+// 資産・カテゴリ・タグのフォームは専用画面で開く（一覧には常駐させない）。
+const isAssetNew = computed(() => routeName.value === "asset-new");
+const isAssetEdit = computed(() => routeName.value === "asset-edit");
+const isCategoryNew = computed(() => routeName.value === "category-new");
+const isCategoryEdit = computed(() => routeName.value === "category-edit");
+const isTagNew = computed(() => routeName.value === "tag-new");
+const isTagEdit = computed(() => routeName.value === "tag-edit");
+
+// 編集対象は取得済みの一覧から引く（ID単体の取得APIはない）。直接着地でも refreshAll で一覧が揃えば解決できる。
+const routedAsset = computed<FinancialAsset | null>(() => isAssetEdit.value ? assets.value.find((asset) => asset.id === String(route.params.id ?? "")) ?? null : null);
+const routedCategory = computed<Category | null>(() => isCategoryEdit.value ? [...taxonomy.categories, ...taxonomy.incomeCategories].find((category) => category.id === String(route.params.id ?? "")) ?? null : null);
+const routedTag = computed<Tag | null>(() => isTagEdit.value ? taxonomy.tags.find((tag) => tag.id === String(route.params.id ?? "")) ?? null : null);
+const assetNotFound = computed(() => isAssetEdit.value && dataLoaded.value && !routedAsset.value);
+const categoryNotFound = computed(() => isCategoryEdit.value && dataLoaded.value && !routedCategory.value);
+const tagNotFound = computed(() => isTagEdit.value && dataLoaded.value && !routedTag.value);
+
+function resetAssetForm() {
+  Object.assign(assetForm, { id: "", ownerUserId: currentUser.value?.id ?? "", name: "", assetType: "bank_deposit", quantityText: "", valuationMinor: 0, currency: "JPY", valuationNote: "" });
+}
+function fillAssetForm(asset: FinancialAsset) {
+  Object.assign(assetForm, {
+    id: asset.id,
+    ownerUserId: asset.ownerUserId ?? currentUser.value?.id ?? "",
+    name: asset.name,
+    assetType: asset.assetType,
+    quantityText: asset.quantityText ?? "",
+    valuationMinor: asset.valuationMinor ?? 0,
+    currency: asset.currency,
+    valuationNote: asset.valuationNote ?? ""
+  });
+}
+function resetCategoryForm() {
+  Object.assign(categoryForm, { id: "", code: "", name: "", kind: "expense", sortOrder: 0, dedupeEnabled: true, isActive: true });
+}
+function fillCategoryForm(category: Category) {
+  Object.assign(categoryForm, {
+    id: category.id,
+    code: category.code,
+    name: category.name,
+    kind: category.kind,
+    sortOrder: category.sortOrder,
+    dedupeEnabled: category.dedupeEnabled,
+    isActive: category.isActive
+  });
+}
+function resetTagForm() {
+  Object.assign(tagForm, { id: "", name: "", isActive: true });
+}
+function fillTagForm(tag: Tag) {
+  Object.assign(tagForm, { id: tag.id, name: tag.name, isActive: tag.isActive });
+}
+
+// フォーム画面に入るたびに、routeキー単位で1回だけ初期化する（前の編集値の残りや、一覧の再読み込みで編集中の入力が上書きされるのを防ぐ）。
+let assetFormInitKey = "";
+watch([routeName, () => route.params.id, routedAsset], () => {
+  if (isAssetNew.value) {
+    if (assetFormInitKey !== "asset-new") { resetAssetForm(); assetFormInitKey = "asset-new"; }
+  } else if (isAssetEdit.value) {
+    const asset = routedAsset.value;
+    if (!asset) return;
+    const key = `asset-edit:${asset.id}`;
+    if (assetFormInitKey !== key) { fillAssetForm(asset); assetFormInitKey = key; }
+  } else {
+    assetFormInitKey = "";
+  }
+}, { immediate: true });
+
+let categoryFormInitKey = "";
+watch([routeName, () => route.params.id, routedCategory], () => {
+  if (isCategoryNew.value) {
+    if (categoryFormInitKey !== "category-new") { resetCategoryForm(); categoryFormInitKey = "category-new"; }
+  } else if (isCategoryEdit.value) {
+    const category = routedCategory.value;
+    if (!category) return;
+    const key = `category-edit:${category.id}`;
+    if (categoryFormInitKey !== key) { fillCategoryForm(category); categoryFormInitKey = key; }
+  } else {
+    categoryFormInitKey = "";
+  }
+}, { immediate: true });
+
+let tagFormInitKey = "";
+watch([routeName, () => route.params.id, routedTag], () => {
+  if (isTagNew.value) {
+    if (tagFormInitKey !== "tag-new") { resetTagForm(); tagFormInitKey = "tag-new"; }
+  } else if (isTagEdit.value) {
+    const tag = routedTag.value;
+    if (!tag) return;
+    const key = `tag-edit:${tag.id}`;
+    if (tagFormInitKey !== key) { fillTagForm(tag); tagFormInitKey = key; }
+  } else {
+    tagFormInitKey = "";
+  }
+}, { immediate: true });
+
+// フォーム画面から一覧へ戻る: 一覧から来た場合は back() で戻り（スクロール位置も復元される）、直接着地時は一覧へ進む。
+function backToList(listRouteName: "assets" | "taxonomy") {
+  if (hasInAppPrevious(router) && previousNavEntry(router)?.name === listRouteName) void router.back();
+  else void router.push({ name: listRouteName });
+}
+
 const tabs: Array<{ key: Tab; label: string; icon: any }> = [
   { key: "dashboard", label: "ダッシュボード", icon: BarChart3 },
   { key: "entries", label: "支出・収入", icon: CircleDollarSign },
@@ -356,6 +465,7 @@ async function refreshAll() {
     ]);
     if (generation !== refreshGeneration) return;
     if (!currentUser.value) assetForm.ownerUserId = me.id;
+    dataLoaded.value = true;
     currentUser.value = me;
     taxonomy.categories = tx.categories;
     taxonomy.incomeCategories = tx.incomeCategories;
@@ -515,17 +625,19 @@ async function markNotDuplicate(itemId: string, entryId: string) {
 }
 
 async function saveCategory() {
+  let saved = false;
   await run(async () => {
     const body = { ...categoryForm, sortOrder: Number(categoryForm.sortOrder) };
-    if (categoryForm.id) await apiPatch(`/api/categories/${categoryForm.id}`, body);
+    if (isCategoryEdit.value) await apiPatch(`/api/categories/${String(route.params.id ?? "")}`, body);
     else await apiPost("/api/categories", body);
-    Object.assign(categoryForm, { id: "", code: "", name: "", kind: "expense", sortOrder: 0, dedupeEnabled: true, isActive: true });
     await refreshAll();
+    saved = true;
   });
+  if (saved) backToList("taxonomy");
 }
 
-function editCategory(category: Category) {
-  Object.assign(categoryForm, category);
+function cancelCategoryForm() {
+  backToList("taxonomy");
 }
 
 async function deleteCategory(id: string) {
@@ -537,16 +649,19 @@ async function deleteCategory(id: string) {
 }
 
 async function saveTag() {
+  let saved = false;
   await run(async () => {
-    if (tagForm.id) await apiPatch(`/api/tags/${tagForm.id}`, tagForm);
-    else await apiPost("/api/tags", tagForm);
-    Object.assign(tagForm, { id: "", name: "", isActive: true });
+    const body = { name: tagForm.name, isActive: tagForm.isActive };
+    if (isTagEdit.value) await apiPatch(`/api/tags/${String(route.params.id ?? "")}`, body);
+    else await apiPost("/api/tags", body);
     await refreshAll();
+    saved = true;
   });
+  if (saved) backToList("taxonomy");
 }
 
-function editTag(tag: Tag) {
-  Object.assign(tagForm, tag);
+function cancelTagForm() {
+  backToList("taxonomy");
 }
 
 async function deleteTag(id: string) {
@@ -558,6 +673,7 @@ async function deleteTag(id: string) {
 }
 
 async function saveAsset() {
+  let saved = false;
   await run(async () => {
     const body = {
       ...assetForm,
@@ -565,24 +681,16 @@ async function saveAsset() {
       quantityText: assetForm.quantityText || null,
       valuationNote: assetForm.valuationNote || null
     };
-    if (assetForm.id) await apiPatch(`/api/financial-assets/${assetForm.id}`, body);
+    if (isAssetEdit.value) await apiPatch(`/api/financial-assets/${String(route.params.id ?? "")}`, body);
     else await apiPost("/api/financial-assets", body);
-    Object.assign(assetForm, { id: "", ownerUserId: currentUser.value?.id ?? "", name: "", assetType: "bank_deposit", quantityText: "", valuationMinor: 0, currency: "JPY", valuationNote: "" });
     await refreshAll();
+    saved = true;
   });
+  if (saved) backToList("assets");
 }
 
-function editAsset(asset: FinancialAsset) {
-  Object.assign(assetForm, {
-    id: asset.id,
-    ownerUserId: asset.ownerUserId ?? currentUser.value?.id ?? "",
-    name: asset.name,
-    assetType: asset.assetType,
-    quantityText: asset.quantityText ?? "",
-    valuationMinor: asset.valuationMinor ?? 0,
-    currency: asset.currency,
-    valuationNote: asset.valuationNote ?? ""
-  });
+function cancelAssetForm() {
+  backToList("assets");
 }
 
 async function deleteAsset(id: string) {
@@ -976,36 +1084,45 @@ async function run(task: () => Promise<void>) {
         </div>
       </section>
 
-      <section v-if="activeTab === 'assets'" class="split">
+      <section v-if="assetNotFound" class="panel" data-testid="asset-not-found">
+        <h2>金融資産を表示できないよ</h2>
+        <p class="muted">対象の金融資産が見つからなかったよ。</p>
+        <button type="button" @click="router.push({ name: 'assets' })">金融資産の一覧に戻る</button>
+      </section>
+      <form v-if="(isAssetNew || isAssetEdit) && !assetNotFound" class="panel form" @submit.prevent="saveAsset">
+        <h2><Database :size="20" /> {{ isAssetEdit ? "金融資産を編集" : "金融資産を登録" }}</h2>
+        <select v-model="assetForm.ownerUserId" name="assetOwnerUserId" aria-label="所有者" required>
+          <option value="">所有者を選んでね</option>
+          <option v-for="user in users" :key="user.id" :value="user.id">{{ user.displayName }}</option>
+        </select>
+        <input v-model="assetForm.name" placeholder="資産名" required />
+        <select v-model="assetForm.assetType">
+          <option value="cash">現金</option>
+          <option value="bank_deposit">銀行預金</option>
+          <option value="investment_trust">投資信託</option>
+          <option value="stock">株式</option>
+          <option value="crypto">暗号資産</option>
+          <option value="pension">年金</option>
+          <option value="other">その他</option>
+        </select>
+        <input v-model="assetForm.quantityText" placeholder="数量メモ" />
+        <input v-model.number="assetForm.valuationMinor" type="number" min="0" placeholder="評価額" />
+        <textarea v-model="assetForm.valuationNote" placeholder="評価メモ"></textarea>
+        <div class="actions">
+          <button type="button" @click="cancelAssetForm">キャンセル</button>
+          <button class="primary"><Save :size="18" /> 保存</button>
+        </div>
+      </form>
+
+      <section v-if="routeName === 'assets'" class="split">
         <section class="panel wide asset-totals" data-testid="asset-totals">
           <h2>登録資産の合計（目安）</h2>
           <p class="muted">登録されている評価額の合計だよ。未登録分は含まれないよ。</p>
           <p v-if="assetTotals.length === 0">評価額の登録はまだないよ。</p>
           <div v-for="[currency, total] in assetTotals" :key="currency"><span>{{ currency }}</span><strong>{{ formatMoney(total, currency) }}</strong></div>
         </section>
-        <form class="panel form" @submit.prevent="saveAsset">
-          <h2><Database :size="20" /> 金融資産</h2>
-          <select v-model="assetForm.ownerUserId" name="assetOwnerUserId" aria-label="所有者" required>
-            <option value="">所有者を選んでね</option>
-            <option v-for="user in users" :key="user.id" :value="user.id">{{ user.displayName }}</option>
-          </select>
-          <input v-model="assetForm.name" placeholder="資産名" required />
-          <select v-model="assetForm.assetType">
-            <option value="cash">現金</option>
-            <option value="bank_deposit">銀行預金</option>
-            <option value="investment_trust">投資信託</option>
-            <option value="stock">株式</option>
-            <option value="crypto">暗号資産</option>
-            <option value="pension">年金</option>
-            <option value="other">その他</option>
-          </select>
-          <input v-model="assetForm.quantityText" placeholder="数量メモ" />
-          <input v-model.number="assetForm.valuationMinor" type="number" min="0" placeholder="評価額" />
-          <textarea v-model="assetForm.valuationNote" placeholder="評価メモ"></textarea>
-          <button class="primary"><Save :size="18" /> 保存</button>
-        </form>
         <section class="panel list-panel">
-          <h2>登録資産</h2>
+          <div class="detail-header"><h2>登録資産</h2><button type="button" class="primary" @click="router.push({ name: 'asset-new' })">新規登録</button></div>
           <table class="asset-table">
             <thead><tr><th>資産名</th><th>種別</th><th>所有者</th><th>評価額</th><th>操作</th></tr></thead>
             <tbody>
@@ -1015,7 +1132,7 @@ async function run(task: () => Promise<void>) {
                 <td data-label="所有者"><PersonName :name="users.find(user => user.id === asset.ownerUserId)?.displayName ?? '不明'" /></td>
                 <td data-label="評価額">{{ asset.valuationMinor == null ? '未登録' : formatMoney(asset.valuationMinor, asset.currency) }}</td>
                 <td class="actions">
-                  <button class="small" @click="editAsset(asset)">編集</button>
+                  <button class="small" @click="router.push({ name: 'asset-edit', params: { id: asset.id } })">編集</button>
                   <button class="icon-button danger" title="無効化" @click="deleteAsset(asset.id)"><Trash2 :size="16" /></button>
                 </td>
               </tr>
@@ -1024,28 +1141,45 @@ async function run(task: () => Promise<void>) {
         </section>
       </section>
 
-      <section v-if="activeTab === 'taxonomy'" class="split">
-        <form class="panel form" @submit.prevent="saveCategory">
-          <h2><TagIcon :size="20" /> カテゴリ</h2>
-          <input v-model="categoryForm.code" placeholder="コード" required />
-          <input v-model="categoryForm.name" placeholder="名前" required />
-          <select v-model="categoryForm.kind">
-            <option value="expense">支出</option>
-            <option value="income">収入</option>
-          </select>
-          <input v-model.number="categoryForm.sortOrder" type="number" placeholder="表示順" />
-          <label><input v-model="categoryForm.dedupeEnabled" type="checkbox" /> 重複判定</label>
-          <label><input v-model="categoryForm.isActive" type="checkbox" /> 有効</label>
+      <section v-if="categoryNotFound" class="panel" data-testid="category-not-found">
+        <h2>カテゴリを表示できないよ</h2>
+        <p class="muted">対象のカテゴリが見つからなかったよ。</p>
+        <button type="button" @click="router.push({ name: 'taxonomy' })">カテゴリ・タグの一覧に戻る</button>
+      </section>
+      <form v-if="(isCategoryNew || isCategoryEdit) && !categoryNotFound" class="panel form" @submit.prevent="saveCategory">
+        <h2><TagIcon :size="20" /> {{ isCategoryEdit ? "カテゴリを編集" : "カテゴリを追加" }}</h2>
+        <input v-model="categoryForm.code" placeholder="コード" required />
+        <input v-model="categoryForm.name" placeholder="名前" required />
+        <select v-model="categoryForm.kind">
+          <option value="expense">支出</option>
+          <option value="income">収入</option>
+        </select>
+        <input v-model.number="categoryForm.sortOrder" type="number" placeholder="表示順" />
+        <label><input v-model="categoryForm.dedupeEnabled" type="checkbox" /> 重複判定</label>
+        <label><input v-model="categoryForm.isActive" type="checkbox" /> 有効</label>
+        <div class="actions">
+          <button type="button" @click="cancelCategoryForm">キャンセル</button>
           <button class="primary"><Save :size="18" /> 保存</button>
-        </form>
-        <form class="panel form" @submit.prevent="saveTag">
-          <h2><TagIcon :size="20" /> タグ</h2>
-          <input v-model="tagForm.name" placeholder="名前" required />
-          <label><input v-model="tagForm.isActive" type="checkbox" /> 有効</label>
+        </div>
+      </form>
+      <section v-if="tagNotFound" class="panel" data-testid="tag-not-found">
+        <h2>タグを表示できないよ</h2>
+        <p class="muted">対象のタグが見つからなかったよ。</p>
+        <button type="button" @click="router.push({ name: 'taxonomy' })">カテゴリ・タグの一覧に戻る</button>
+      </section>
+      <form v-if="(isTagNew || isTagEdit) && !tagNotFound" class="panel form" @submit.prevent="saveTag">
+        <h2><TagIcon :size="20" /> {{ isTagEdit ? "タグを編集" : "タグを追加" }}</h2>
+        <input v-model="tagForm.name" placeholder="名前" required />
+        <label><input v-model="tagForm.isActive" type="checkbox" /> 有効</label>
+        <div class="actions">
+          <button type="button" @click="cancelTagForm">キャンセル</button>
           <button class="primary"><Save :size="18" /> 保存</button>
-        </form>
+        </div>
+      </form>
+
+      <section v-if="routeName === 'taxonomy'" class="split">
         <section class="panel list-panel wide">
-          <h2>一覧</h2>
+          <div class="detail-header"><h2>一覧</h2><span class="actions"><button type="button" class="primary" @click="router.push({ name: 'category-new' })">カテゴリを追加</button><button type="button" class="primary" @click="router.push({ name: 'tag-new' })">タグを追加</button></span></div>
           <table>
             <tbody>
               <tr v-for="category in allCategories" :key="category.id">
@@ -1054,7 +1188,7 @@ async function run(task: () => Promise<void>) {
                 <td>{{ category.name }}</td>
                 <td>{{ category.isActive ? "有効" : "無効" }}</td>
                 <td class="actions">
-                  <button class="small" @click="editCategory(category)">編集</button>
+                  <button class="small" @click="router.push({ name: 'category-edit', params: { id: category.id } })">編集</button>
                   <button class="icon-button danger" title="削除または無効化" @click="deleteCategory(category.id)"><Trash2 :size="16" /></button>
                 </td>
               </tr>
@@ -1064,7 +1198,7 @@ async function run(task: () => Promise<void>) {
                 <td>{{ tag.name }}</td>
                 <td>{{ tag.isActive ? "有効" : "無効" }}</td>
                 <td class="actions">
-                  <button class="small" @click="editTag(tag)">編集</button>
+                  <button class="small" @click="router.push({ name: 'tag-edit', params: { id: tag.id } })">編集</button>
                   <button class="icon-button danger" title="削除または無効化" @click="deleteTag(tag.id)"><Trash2 :size="16" /></button>
                 </td>
               </tr>

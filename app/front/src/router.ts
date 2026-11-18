@@ -19,7 +19,13 @@ export function createAppRouter(history: RouterHistory = createWebHistory()): Ro
       { path: "/source-items", name: "source-items", component: AppShell },
       { path: "/duplicates", name: "duplicates", component: AppShell },
       { path: "/assets", name: "assets", component: AppShell },
+      { path: "/assets/new", name: "asset-new", component: AppShell },
+      { path: "/assets/:id/edit", name: "asset-edit", component: AppShell },
       { path: "/taxonomy", name: "taxonomy", component: AppShell },
+      { path: "/taxonomy/category/new", name: "category-new", component: AppShell },
+      { path: "/taxonomy/category/:id/edit", name: "category-edit", component: AppShell },
+      { path: "/taxonomy/tag/new", name: "tag-new", component: AppShell },
+      { path: "/taxonomy/tag/:id/edit", name: "tag-edit", component: AppShell },
       { path: "/archives", name: "archives", component: AppShell },
       { path: "/:pathMatch(.*)*", name: "not-found", component: AppShell }
     ],
