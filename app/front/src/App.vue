@@ -56,8 +56,10 @@ const TAB_BY_ROUTE: Record<string, Tab> = {
   entries: "entries",
   "entry-details": "entries",
   "entry-edit": "entries",
+  "entry-new": "entries",
   receipts: "receipts",
   "source-items": "source-items",
+  "source-item-register": "source-items",
   duplicates: "duplicates",
   assets: "assets",
   "asset-new": "assets",
@@ -72,6 +74,17 @@ const TAB_BY_ROUTE: Record<string, Tab> = {
 const activeTab = computed<Tab>(() => TAB_BY_ROUTE[routeName.value] ?? "dashboard");
 const isEntryDetails = computed(() => routeName.value === "entry-details");
 const isEntryEdit = computed(() => routeName.value === "entry-edit");
+const isEntryNew = computed(() => routeName.value === "entry-new");
+
+// 集中画面（詳細・編集・新規登録など単一対象の画面）ではサイドバーと topbar を出さず、対象のパネルだけにする。
+const FOCUSED_ROUTES = new Set([
+  "entry-details", "entry-edit", "entry-new",
+  "asset-new", "asset-edit",
+  "category-new", "category-edit",
+  "tag-new", "tag-edit",
+  "source-item-register"
+]);
+const isFocused = computed(() => FOCUSED_ROUTES.has(routeName.value));
 
 function queryString(key: string): string | undefined {
   const value = route.query[key];
@@ -252,6 +265,11 @@ const assetNotFound = computed(() => isAssetEdit.value && dataLoaded.value && !r
 const categoryNotFound = computed(() => isCategoryEdit.value && dataLoaded.value && !routedCategory.value);
 const tagNotFound = computed(() => isTagEdit.value && dataLoaded.value && !routedTag.value);
 
+// 登録元明細の登録も専用画面で開く（一覧にはサマリーだけを並べる）。対象は取得済みの一覧から引く。
+const isSourceItemRegister = computed(() => routeName.value === "source-item-register");
+const routedSourceItem = computed<EntrySourceItem | null>(() => isSourceItemRegister.value ? sourceItems.value.find((item) => item.id === String(route.params.id ?? "")) ?? null : null);
+const sourceItemNotFound = computed(() => isSourceItemRegister.value && dataLoaded.value && !routedSourceItem.value);
+
 function resetAssetForm() {
   Object.assign(assetForm, { id: "", ownerUserId: currentUser.value?.id ?? "", name: "", assetType: "bank_deposit", quantityText: "", valuationMinor: 0, currency: "JPY", valuationNote: "" });
 }
@@ -332,7 +350,7 @@ watch([routeName, () => route.params.id, routedTag], () => {
 }, { immediate: true });
 
 // フォーム画面から一覧へ戻る: 一覧から来た場合は back() で戻り（スクロール位置も復元される）、直接着地時は一覧へ進む。
-function backToList(listRouteName: "assets" | "taxonomy") {
+function backToList(listRouteName: "assets" | "taxonomy" | "entries" | "source-items") {
   if (hasInAppPrevious(router) && previousNavEntry(router)?.name === listRouteName) void router.back();
   else void router.push({ name: listRouteName });
 }
@@ -525,12 +543,15 @@ function cancelEntryEdit() {
 
 async function entrySaved(saved: Entry) {
   const wasRoutedEdit = isEntryEdit.value;
+  const wasEntryNew = isEntryNew.value;
   if (wasRoutedEdit) routedEntry.value = saved;
   // 保存は完了しているので、遷移ガードを解除してから戻る。
   entryEditorBusy.value = false;
   await refreshAll();
   notice.value = wasRoutedEdit ? "明細の変更を保存した。" : "登録した。";
   if (wasRoutedEdit) finishEditNavigation(saved);
+  // 新規登録画面では保存後に一覧へ戻る（一覧に常駐していた頃はその場で完結していた）。
+  else if (wasEntryNew) backToList("entries");
 }
 
 async function deleteEntry(id: string) {
@@ -601,6 +622,25 @@ async function deleteSourceItem(id: string) {
     await apiDelete(`/api/entry-source-items/${id}`);
     await refreshAll();
   });
+}
+
+// 登録画面で確定（post）が成功したら一覧へ戻る（下書き保存の changed では画面に留まる）。
+async function sourceItemPosted() {
+  await refreshAll();
+  backToList("source-items");
+}
+
+// 登録画面での削除は、成功したら一覧へ戻る。
+async function deleteRoutedSourceItem() {
+  const item = routedSourceItem.value;
+  if (!item) return;
+  let deleted = false;
+  await run(async () => {
+    await apiDelete(`/api/entry-source-items/${item.id}`);
+    await refreshAll();
+    deleted = true;
+  });
+  if (deleted) backToList("source-items");
 }
 
 async function loadDuplicateCandidates(itemId: string) {
@@ -833,8 +873,8 @@ async function run(task: () => Promise<void>) {
 </script>
 
 <template>
-  <div class="app-shell">
-    <aside class="sidebar">
+  <div class="app-shell" :class="{ focused: isFocused }">
+    <aside v-if="!isFocused" class="sidebar">
       <div class="brand">
         <CircleDollarSign :size="28" />
         <div>
@@ -851,7 +891,7 @@ async function run(task: () => Promise<void>) {
     </aside>
 
     <main class="main">
-      <header class="topbar">
+      <header v-if="!isFocused" class="topbar">
         <details v-if="activeTab === 'dashboard' || activeTab === 'entries' || activeTab === 'receipts'" class="search-panel" data-testid="search-panel">
           <summary><strong>検索・絞り込み</strong><span>{{ filterSummary }}</span></summary>
           <div class="filters">
@@ -910,6 +950,12 @@ async function run(task: () => Promise<void>) {
         @back="backFromDetails" @edit="editEntry(routedEntry.id)" />
       <EntryEditor v-if="isEntryEdit && routedEntry" :entry="routedEntry" :categories="allCategories" :tags="taxonomy.tags" :users="users"
         :default-subject-user-id="currentUser?.id ?? ''" :disabled="loading" @saved="entrySaved" @cancel="cancelEntryEdit" @busy="setEntryEditorBusy" />
+      <template v-if="isEntryNew">
+        <EntryEditor :entry="null" :categories="allCategories" :tags="taxonomy.tags" :users="users"
+          :default-subject-user-id="currentUser?.id ?? ''" :disabled="loading"
+          @saved="entrySaved" @cancel="cancelEntryEdit" @busy="setEntryEditorBusy" />
+        <p class="form-screen-back"><button type="button" @click="backToList('entries')">一覧に戻る</button></p>
+      </template>
 
       <section v-if="activeTab === 'dashboard' && !isNotFound && !invalidDashboardDay" class="content-grid">
         <section class="panel wide period-panel">
@@ -987,13 +1033,9 @@ async function run(task: () => Promise<void>) {
         </section>
       </section>
 
-      <section v-if="routeName === 'entries'" class="split">
-        <EntryEditor :entry="null" :categories="allCategories" :tags="taxonomy.tags" :users="users"
-          :default-subject-user-id="currentUser?.id ?? ''" :disabled="loading"
-          @saved="entrySaved" @cancel="cancelEntryEdit" @busy="setEntryEditorBusy" />
-
+      <section v-if="routeName === 'entries'">
         <section class="panel list-panel">
-          <h2><ListChecks :size="20" /> 明細</h2>
+          <div class="detail-header"><h2><ListChecks :size="20" /> 明細</h2><button type="button" class="primary" @click="router.push({ name: 'entry-new' })">新規登録</button></div>
           <form class="receipt-group-form" @submit.prevent="createReceipt">
             <input v-model="receiptDisplayName" name="receiptDisplayName" placeholder="レシート名（例: 〇〇パン）" :disabled="loading" />
             <button class="primary" :disabled="loading || selectedEntryIds.length < 2">選択した{{ selectedEntryIds.length }}件をまとめる</button>
@@ -1052,19 +1094,38 @@ async function run(task: () => Promise<void>) {
         </nav>
       </section>
 
-      <section v-if="activeTab === 'source-items'" class="panel list-panel">
+      <section v-if="routeName === 'source-items'" class="panel list-panel">
         <h2><FolderInput :size="20" /> 登録元明細</h2>
         <p v-if="sourceItems.length === 0">確認待ちの明細はないよ。</p>
+        <div v-for="item in sourceItems" :key="item.id" class="source-item-row" data-testid="source-item-row">
+          <div class="source-item-summary">
+            <strong>{{ item.entryDate ?? "日付未定" }} {{ item.target || "用途なし" }}</strong>
+            <span v-if="item.amount != null">{{ formatCurrency(item.amount) }}</span>
+            <span class="muted">推定カテゴリ: {{ item.categoryNameGuess ?? "未分類" }} ・ 信頼度: {{ item.confidence == null ? "不明" : `${Math.round(item.confidence * 100)}%` }}</span>
+          </div>
+          <div class="actions">
+            <button type="button" class="primary small" @click="router.push({ name: 'source-item-register', params: { id: item.id } })">登録</button>
+            <button type="button" class="danger small" @click="deleteSourceItem(item.id)">削除</button>
+          </div>
+        </div>
+      </section>
+
+      <section v-if="sourceItemNotFound" class="panel" data-testid="source-item-not-found">
+        <h2>登録元明細を表示できないよ</h2>
+        <p class="muted">対象の登録元明細が見つからなかったよ。</p>
+        <button type="button" @click="router.push({ name: 'source-items' })">登録元明細の一覧に戻る</button>
+      </section>
+      <section v-if="isSourceItemRegister && routedSourceItem" class="panel list-panel">
+        <div class="detail-header"><h2><FolderInput :size="20" /> 登録元明細を登録</h2><button type="button" @click="backToList('source-items')">一覧に戻る</button></div>
         <SourceItemReview
-          v-for="item in sourceItems"
-          :key="item.id"
-          :item="item"
+          :item="routedSourceItem"
           :categories="allCategories"
           :tags="taxonomy.tags"
           :users="users"
           :default-subject-user-id="currentUser?.id ?? ''"
           @changed="refreshAll"
-          @remove="deleteSourceItem(item.id)"
+          @posted="sourceItemPosted"
+          @remove="deleteRoutedSourceItem"
         />
       </section>
 

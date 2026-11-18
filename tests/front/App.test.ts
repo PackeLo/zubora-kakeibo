@@ -48,7 +48,8 @@ describe("signed-in user initialization", () => {
     expect(writes[0][0]).toBe("/api/entries/ent_saved");
     expect(JSON.parse(String(writes[0][1]?.body))).toEqual({ expectedRevision: "original", amount: 120 });
     expect(wrapper.text()).toContain("明細の変更を保存した。");
-    expect(wrapper.get(".entry-editor").text()).toContain("手入力");
+    // 保存後は明細一覧へ戻り、手入力フォームは一覧に常駐しない（専用画面 /entries/new へ分離済み）。
+    expect(wrapper.find(".entry-editor").exists()).toBe(false);
     wrapper.unmount();
   });
 
@@ -67,8 +68,14 @@ describe("signed-in user initialization", () => {
     const wrapper = await mountApp();
     await wrapper.findAll("nav button").find((button) => button.text() === "支出・収入")!.trigger("click");
     await flushPromises();
+    // 手入力フォームは専用画面に移ったので、新規登録から開いて対象者の初期値を確認する。
+    await wrapper.findAll("button").find((button) => button.text() === "新規登録")!.trigger("click");
+    await flushPromises();
     expect(wrapper.get('[name="manualSubjectUserId"]').element).toHaveProperty("value", me.id);
     expect(wrapper.get('[name="manualSubjectUserId"]').text()).toContain(me.displayName);
+    // 新規登録画面は集中画面（サイドバーなし）なので、一覧へ戻ってからタブを切り替える。
+    await wrapper.findAll("button").find((button) => button.text() === "一覧に戻る")!.trigger("click");
+    await flushPromises();
     await wrapper.findAll("nav button").find((button) => button.text() === "金融資産")!.trigger("click");
     await flushPromises();
     // 資産フォームは専用画面に移ったので、新規登録から開いて所有者の初期値を確認する。

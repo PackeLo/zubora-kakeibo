@@ -117,6 +117,33 @@ th {
   grid-template-columns: 248px 1fr;
 }
 
+/* 集中画面（詳細・編集・登録）ではサイドバーを出さないので1カラムにする。 */
+.app-shell.focused {
+  grid-template-columns: 1fr;
+}
+
+.form-screen-back {
+  margin: 12px 0 0;
+}
+
+.source-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  border-top: 1px solid #e2e8f0;
+  padding: 12px 0;
+}
+
+.source-item-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
 .sidebar {
   background: #ffffff;
   border-right: 1px solid #e2e8f0;

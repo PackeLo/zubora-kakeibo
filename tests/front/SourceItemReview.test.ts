@@ -44,6 +44,8 @@ describe("source item review", () => {
     expect(url).toBe("/api/entry-source-items/esi_receipt/post");
     expect(JSON.parse(String(init?.body))).toMatchObject({ categoryId: "cat_food", amount: 1200, tagIds: ["tag_family"], subjectUserId: "usr_signed_in" });
     expect(wrapper.emitted("changed")).toHaveLength(1);
+    // 確定（post）成功時は posted も出る（呼び出し側が一覧へ戻るために使う）。
+    expect(wrapper.emitted("posted")).toHaveLength(1);
   });
 
   it("allows missing date, amount and category to be completed before posting", async () => {
@@ -67,6 +69,8 @@ describe("source item review", () => {
     expect(url).toBe("/api/entry-source-items/esi_receipt");
     expect(init?.method).toBe("PATCH");
     expect(JSON.parse(String(init?.body))).toMatchObject({ entryDate: null, categoryIdGuess: "cat_food", categoryNameGuess: "食費", tagsJson: JSON.stringify(["家族", "旅行"]) });
+    // 下書き保存では posted は出ない（画面に留まる）。
+    expect(wrapper.emitted("posted")).toBeUndefined();
   });
 
   it("requires an explicit choice before dropping unknown tags", async () => {

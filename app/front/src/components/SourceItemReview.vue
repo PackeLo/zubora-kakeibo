@@ -9,7 +9,7 @@ const props = defineProps<{
   users: User[];
   defaultSubjectUserId: string;
 }>();
-const emit = defineEmits<{ changed: []; remove: [] }>();
+const emit = defineEmits<{ changed: []; posted: []; remove: [] }>();
 const busy = ref(false);
 const error = ref("");
 const notice = ref("");
@@ -107,6 +107,8 @@ async function save(mode: "draft" | "post") {
       await apiPost(`/api/entry-source-items/${props.item.id}/post`, input);
     }
     emit("changed");
+    // 確定（post）成功時だけ posted も出す（下書き保存では画面に留まるため、呼び出し側が戻り遷移に使う）。
+    if (mode === "post") emit("posted");
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
   } finally {
